@@ -22,7 +22,6 @@ It works even if you’re on a **PC, Mac, Laptop, iPad, Tablet, Chromebook, or P
 
 ### 🌐 **Stream Now (Free & No Ads)**
 > 🔗 **Web App:** https://gokuthug1.github.io/zenith-anime/
-> *(Coming soon: \`https://zenithanime.is-a.dev\`)*
 > 📦 **Android APK:** https://gokuthug1.github.io/zenith-anime/landing.html
 > 💻 **GitHub Repo:** https://github.com/gokuthug1/zenith-anime
 
