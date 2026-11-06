@@ -46,12 +46,16 @@ import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.PlayCircleOutline
 import androidx.compose.material.icons.filled.ReportProblem
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.SyncAlt
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -252,6 +256,60 @@ fun ProfileScreen(
 
     var importJsonText by remember { mutableStateOf("") }
     var backupStatusMessage by remember { mutableStateOf("") }
+    var pendingJsonImportMode by remember { mutableStateOf("MERGE") }
+    var showLegacyClipboardSection by remember { mutableStateOf(false) }
+
+    val jsonFileImportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val jsonContent = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use {
+                            it.readText()
+                        }
+                    } catch (_: Throwable) {
+                        null
+                    }
+                }
+                if (!jsonContent.isNullOrBlank()) {
+                    val res = repository.importBackupJson(jsonContent, mode = pendingJsonImportMode)
+                    backupStatusMessage = res
+                    Toast.makeText(context, res, Toast.LENGTH_LONG).show()
+                } else {
+                    backupStatusMessage = "Failed to read selected JSON file."
+                    Toast.makeText(context, "Could not read selected JSON file", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    val jsonFileExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                val json = repository.exportBackupJson()
+                val ok = withContext(Dispatchers.IO) {
+                    try {
+                        context.contentResolver.openOutputStream(uri)?.use { out ->
+                            out.write(json.toByteArray(Charsets.UTF_8))
+                        }
+                        true
+                    } catch (_: Throwable) {
+                        false
+                    }
+                }
+                if (ok) {
+                    backupStatusMessage = "Backup JSON saved to selected file!"
+                    Toast.makeText(context, "Backup file saved!", Toast.LENGTH_LONG).show()
+                } else {
+                    backupStatusMessage = "Could not write to selected location."
+                }
+            }
+        }
+    }
 
     val watchHistory by repository.allHistory.collectAsState(initial = emptyList())
     val favorites by repository.favorites.collectAsState(initial = emptyList())
@@ -1196,12 +1254,20 @@ fun ProfileScreen(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     Text(
-                        text = "Zenith Anime is strictly local-first. Your favorites, watch progress, and history never leave your device without your explicit export.",
+                        text = "Zenith Anime is strictly local-first. Export your library and watch history to a .json file, or upload a .json backup file to restore.",
                         color = TextSecondary,
                         fontSize = 12.sp
                     )
 
                     Spacer(modifier = Modifier.height(14.dp))
+
+                    Text(
+                        text = "EXPORT BACKUP FILE",
+                        color = themeAccent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -1216,9 +1282,7 @@ fun ProfileScreen(
                                         backupStatusMessage = "Backup file saved ($res)"
                                         Toast.makeText(context, "Saved to Downloads", Toast.LENGTH_LONG).show()
                                     } else {
-                                        clipboardManager.setText(AnnotatedString(json))
-                                        backupStatusMessage = "Storage unavailable. Copied backup JSON to clipboard."
-                                        Toast.makeText(context, "Backup copied to clipboard", Toast.LENGTH_LONG).show()
+                                        jsonFileExportLauncher.launch("zenith_anime_backup_${System.currentTimeMillis()}.json")
                                     }
                                 }
                             },
@@ -1227,8 +1291,94 @@ fun ProfileScreen(
                         ) {
                             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(5.dp))
-                            Text("Download File", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("Save to Downloads", fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         }
+
+                        Button(
+                            onClick = {
+                                jsonFileExportLauncher.launch("zenith_anime_backup_${System.currentTimeMillis()}.json")
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = TextPrimary),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.FileOpen, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text("Save File As…", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        text = "RESTORE / UPLOAD JSON FILE",
+                        color = themeAccent,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Select a .json backup file from your device storage or Downloads folder.",
+                        color = TextSecondary,
+                        fontSize = 11.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Button(
+                        onClick = {
+                            pendingJsonImportMode = "MERGE"
+                            jsonFileImportLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*"))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = themeAccent, contentColor = MaterialTheme.colorScheme.background),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Upload JSON File (Smart Merge)", fontWeight = FontWeight.Bold, fontSize = 12.5.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Button(
+                        onClick = {
+                            pendingJsonImportMode = "REPLACE"
+                            jsonFileImportLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*"))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF331E24), contentColor = AccentRed),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Upload JSON File (Replace All Data)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                    HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { showLegacyClipboardSection = !showLegacyClipboardSection }
+                            .padding(vertical = 6.dp, horizontal = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Legacy: Clipboard Copy & Paste JSON",
+                            color = TextSecondary,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Icon(
+                            imageVector = if (showLegacyClipboardSection) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = "Toggle legacy clipboard section",
+                            tint = TextSecondary
+                        )
+                    }
+
+                    if (showLegacyClipboardSection) {
+                        Spacer(modifier = Modifier.height(8.dp))
 
                         Button(
                             onClick = {
@@ -1240,67 +1390,67 @@ fun ProfileScreen(
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = TextPrimary),
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text("Copy JSON", fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    OutlinedTextField(
-                        value = importJsonText,
-                        onValueChange = { importJsonText = it },
-                        label = { Text("Paste Backup JSON to Import/Merge") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(100.dp),
-                        maxLines = 4
-                    )
-
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    if (importJsonText.isNotBlank()) {
-                                        val res = repository.importBackupJson(importJsonText, mode = "MERGE")
-                                        backupStatusMessage = res
-                                        Toast.makeText(context, res, Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = themeAccent.copy(alpha = 0.2f), contentColor = themeAccent),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("Smart Merge", fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Copy Backup JSON to Clipboard", fontWeight = FontWeight.Bold, fontSize = 12.sp)
                         }
 
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    if (importJsonText.isNotBlank()) {
-                                        val res = repository.importBackupJson(importJsonText, mode = "REPLACE")
-                                        backupStatusMessage = res
-                                        Toast.makeText(context, res, Toast.LENGTH_LONG).show()
-                                    }
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF331E24), contentColor = AccentRed),
-                            modifier = Modifier.weight(1f)
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedTextField(
+                            value = importJsonText,
+                            onValueChange = { importJsonText = it },
+                            label = { Text("Paste Backup JSON (Legacy)") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(100.dp),
+                            maxLines = 4
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("Replace Data", fontWeight = FontWeight.Bold)
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        if (importJsonText.isNotBlank()) {
+                                            val res = repository.importBackupJson(importJsonText, mode = "MERGE")
+                                            backupStatusMessage = res
+                                            Toast.makeText(context, res, Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = themeAccent.copy(alpha = 0.2f), contentColor = themeAccent),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Merge Pasted", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
+
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        if (importJsonText.isNotBlank()) {
+                                            val res = repository.importBackupJson(importJsonText, mode = "REPLACE")
+                                            backupStatusMessage = res
+                                            Toast.makeText(context, res, Toast.LENGTH_LONG).show()
+                                        }
+                                    }
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF331E24), contentColor = AccentRed),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("Replace Pasted", fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                            }
                         }
                     }
 
                     if (backupStatusMessage.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
                         Text(
                             text = backupStatusMessage,
                             color = themeAccent,

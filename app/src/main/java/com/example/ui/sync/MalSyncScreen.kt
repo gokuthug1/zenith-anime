@@ -1,6 +1,8 @@
 package com.example.ui.sync
 
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,9 +27,17 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudUpload
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Sync
+import androidx.compose.material.icons.filled.UploadFile
+import com.example.ui.profile.saveBackupToDeviceStorage
+import com.example.ui.theme.AccentRed
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -382,28 +392,66 @@ fun MalSyncScreen(
                     }
                 }
             } else if (selectedTab == 1) {
-                // EXPORT TAB
+                var backupStatusMsg by remember { mutableStateOf("") }
+                var legacyJsonInput by remember { mutableStateOf("") }
+                var showLegacyClipboard by remember { mutableStateOf(false) }
+                var pendingFileImportMode by remember { mutableStateOf("MERGE") }
+
+                val jsonImportLauncher = rememberLauncherForActivityResult(
+                    contract = ActivityResultContracts.OpenDocument()
+                ) { uri ->
+                    if (uri != null) {
+                        scope.launch {
+                            val jsonContent = withContext(Dispatchers.IO) {
+                                try {
+                                    context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use {
+                                        it.readText()
+                                    }
+                                } catch (_: Throwable) {
+                                    null
+                                }
+                            }
+                            if (!jsonContent.isNullOrBlank()) {
+                                val res = repository.importBackupJson(jsonContent, mode = pendingFileImportMode)
+                                backupStatusMsg = res
+                                Toast.makeText(context, res, Toast.LENGTH_LONG).show()
+                            } else {
+                                backupStatusMsg = "Could not read selected JSON file."
+                                Toast.makeText(context, "Failed to read JSON file", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                }
+
+                // EXPORT & BACKUP TAB
                 Text(
-                    text = "Export Watchlist Data",
+                    text = "JSON File Backup & Restore",
                     color = TextPrimary,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "Export your local watchlist, watch history, and progress into a universal JSON backup file.",
+                    text = "Export your local watchlist, watch history, and progress into a .json backup file, or upload an existing .json file to restore.",
                     color = TextSecondary,
                     fontSize = 13.sp
                 )
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
                 Button(
                     onClick = {
                         scope.launch {
                             val json = repository.exportBackupJson()
-                            clipboardManager.setText(AnnotatedString(json))
-                            Toast.makeText(context, "Full Watchlist JSON copied to clipboard!", Toast.LENGTH_SHORT).show()
+                            val saved = saveBackupToDeviceStorage(context, json)
+                            if (saved != null) {
+                                backupStatusMsg = "Backup saved ($saved)"
+                                Toast.makeText(context, saved, Toast.LENGTH_LONG).show()
+                            } else {
+                                clipboardManager.setText(AnnotatedString(json))
+                                backupStatusMsg = "Copied backup JSON to clipboard"
+                                Toast.makeText(context, "Copied backup JSON to clipboard", Toast.LENGTH_SHORT).show()
+                            }
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = themeAccent, contentColor = MaterialTheme.colorScheme.background),
@@ -412,9 +460,142 @@ fun MalSyncScreen(
                         .fillMaxWidth()
                         .height(48.dp)
                 ) {
-                    Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Copy Export JSON to Clipboard", fontWeight = FontWeight.Bold)
+                    Text("Save Backup JSON File to Downloads", fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(
+                    text = "Upload JSON Backup File",
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Button(
+                        onClick = {
+                            pendingFileImportMode = "MERGE"
+                            jsonImportLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*"))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = themeAccent, contentColor = MaterialTheme.colorScheme.background),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Upload (Merge)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+
+                    Button(
+                        onClick = {
+                            pendingFileImportMode = "REPLACE"
+                            jsonImportLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream", "*/*"))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF331E24), contentColor = AccentRed),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                    ) {
+                        Icon(Icons.Default.UploadFile, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Upload (Replace)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+                }
+
+                if (backupStatusMsg.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = backupStatusMsg,
+                        color = themeAccent,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { showLegacyClipboard = !showLegacyClipboard }
+                        .padding(vertical = 8.dp, horizontal = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Legacy: Clipboard Copy & Paste JSON",
+                        color = TextSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(
+                        imageVector = if (showLegacyClipboard) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        tint = TextSecondary
+                    )
+                }
+
+                if (showLegacyClipboard) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            scope.launch {
+                                val json = repository.exportBackupJson()
+                                clipboardManager.setText(AnnotatedString(json))
+                                Toast.makeText(context, "Full Watchlist JSON copied to clipboard!", Toast.LENGTH_SHORT).show()
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceVariant, contentColor = TextPrimary),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                    ) {
+                        Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(17.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Copy Export JSON to Clipboard (Legacy)", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    OutlinedTextField(
+                        value = legacyJsonInput,
+                        onValueChange = { legacyJsonInput = it },
+                        label = { Text("Paste Backup JSON (Legacy)") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(100.dp),
+                        maxLines = 4
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Button(
+                        onClick = {
+                            if (legacyJsonInput.isNotBlank()) {
+                                scope.launch {
+                                    val res = repository.importBackupJson(legacyJsonInput, mode = "MERGE")
+                                    backupStatusMsg = res
+                                    Toast.makeText(context, res, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = themeAccent.copy(alpha = 0.2f), contentColor = themeAccent),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Import Pasted JSON (Legacy)", fontWeight = FontWeight.Bold)
+                    }
                 }
             } else {
                 // TRACKER SCROBBLER TAB
