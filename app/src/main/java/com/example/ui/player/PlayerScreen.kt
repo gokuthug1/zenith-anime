@@ -12,6 +12,7 @@ import android.util.Rational
 import android.util.TypedValue
 import android.view.ViewGroup
 import android.widget.Toast
+import com.example.data.util.ShareUtils
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
@@ -264,6 +265,9 @@ fun PlayerScreen(
     var isReady by remember { mutableStateOf(false) }
     var currentTimeSec by remember { mutableLongStateOf(0L) }
     var durationSec by remember { mutableLongStateOf(0L) }
+    var bufferedTimeSec by remember { mutableLongStateOf(0L) }
+    var lastSeekTimestampMs by remember { mutableLongStateOf(0L) }
+    var showRemainingTime by remember { mutableStateOf(false) }
     var isMuted by remember { mutableStateOf(false) }
     var videoVolume by remember { mutableFloatStateOf(1f) }
     var playbackSpeed by remember { mutableFloatStateOf(savedSettings.defaultPlaybackSpeed) }
@@ -488,7 +492,10 @@ fun PlayerScreen(
 
             override fun onEvents(playerRef: Player, events: Player.Events) {
                 durationSec = (playerRef.duration / 1000L).coerceAtLeast(0L)
-                if (!isScrubbing) currentTimeSec = (playerRef.currentPosition / 1000L).coerceAtLeast(0L)
+                bufferedTimeSec = (playerRef.bufferedPosition / 1000L).coerceAtLeast(0L)
+                if (!isScrubbing && (System.currentTimeMillis() - lastSeekTimestampMs > 850L)) {
+                    currentTimeSec = (playerRef.currentPosition / 1000L).coerceAtLeast(0L)
+                }
                 videoVolume = playerRef.volume
                 isMuted = playerRef.volume <= 0f
             }
@@ -758,7 +765,8 @@ fun PlayerScreen(
     LaunchedEffect(isPlaying, isReady, usingEmbedFallback) {
         if (!usingEmbedFallback && isReady) {
             while (true) {
-                if (isPlaying && !isScrubbing) {
+                bufferedTimeSec = (player.bufferedPosition / 1000L).coerceAtLeast(0L)
+                if (isPlaying && !isScrubbing && (System.currentTimeMillis() - lastSeekTimestampMs > 850L)) {
                     val pos = (player.currentPosition / 1000L).coerceAtLeast(0L)
                     val dur = (player.duration / 1000L).coerceAtLeast(0L)
                     if (dur > 0 && dur != durationSec) {
@@ -875,10 +883,12 @@ fun PlayerScreen(
         showFitDialog || showServerSheet || showSourceSheet ||
         showEpisodeSheet || showSleepTimerDialog || showDiagnostics
 
-    LaunchedEffect(showControls, isLocked, isHoldingSpeed, anySheetOpen) {
-        if (showControls && !isLocked && !isHoldingSpeed && !anySheetOpen) {
+    LaunchedEffect(showControls, isLocked, isHoldingSpeed, anySheetOpen, isScrubbing) {
+        if (showControls && !isLocked && !isHoldingSpeed && !anySheetOpen && !isScrubbing) {
             delay(savedSettings.controlsAutoHideSec.coerceAtLeast(3) * 1000L)
-            showControls = false
+            if (!isScrubbing && !isHoldingSpeed && !anySheetOpen) {
+                showControls = false
+            }
         }
     }
 
@@ -976,8 +986,9 @@ fun PlayerScreen(
 
     fun seekTo(target: Long) {
         val clamped = target.coerceAtLeast(0L).let { if (durationSec > 0) it.coerceAtMost(durationSec) else it }
+        lastSeekTimestampMs = System.currentTimeMillis()
         currentTimeSec = clamped
-        if (usingEmbedFallback) embedController.send("seek", clamped.toString())
+        if (usingEmbedFallback) embedController.send("seek", clamped)
         else player.seekTo(clamped * 1000L)
     }
 
@@ -1592,7 +1603,9 @@ fun PlayerScreen(
                     isPlaying = embedState.value.playing
                     isBuffering = embedState.value.buffering
                     durationSec = embedState.value.durationSec
-                    if (!isScrubbing) currentTimeSec = embedState.value.positionSec
+                    if (!isScrubbing && (System.currentTimeMillis() - lastSeekTimestampMs > 850L)) {
+                        currentTimeSec = embedState.value.positionSec
+                    }
                 }
             } else {
                 AndroidView(
@@ -2428,64 +2441,68 @@ fun PlayerScreen(
                             }
                         }
 
-                        val (seekTrackHeight, seekThumbSize) = when (savedSettings.playerSeekbarStyle) {
-                            "Minimal" -> 2.dp to 10.dp
-                            "Thick" -> 7.dp to 18.dp
-                            else -> 3.5.dp to 14.dp
-                        }
+                        val displayedTimeSec = if (isScrubbing) scrubPosition else currentTimeSec
+                        val introSkipDur = savedSettings.introSkipSeconds.coerceIn(5, 300).toLong()
+                        val outroSkipDur = savedSettings.outroSkipSeconds.coerceIn(5, 300).toLong()
+                        val opRange = if (durationSec > introSkipDur + 90L) {
+                            85L..(85L + introSkipDur).coerceAtMost(durationSec)
+                        } else null
+                        val edRange = if (durationSec > outroSkipDur + 120L) {
+                            (durationSec - outroSkipDur).coerceAtLeast(0L)..durationSec
+                        } else null
 
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Text(
-                                text = formatTime(currentTimeSec),
-                                color = Color.White,
+                                text = formatTime(displayedTimeSec),
+                                color = if (isScrubbing) playerAccent else Color.White,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold
                             )
 
-                            Slider(
-                                value = if (isScrubbing) scrubPosition.toFloat()
-                                else if (durationSec > 0) currentTimeSec.toFloat() else 0f,
-                                onValueChange = {
+                            ZenithVideoSeekBar(
+                                currentTimeSec = currentTimeSec,
+                                durationSec = durationSec,
+                                bufferedSec = bufferedTimeSec,
+                                isScrubbing = isScrubbing,
+                                scrubPositionSec = scrubPosition,
+                                seekbarStyle = savedSettings.playerSeekbarStyle,
+                                accentColor = playerAccent,
+                                introRangeSec = opRange,
+                                outroRangeSec = edRange,
+                                enabled = durationSec > 0L,
+                                onScrubStart = { pos ->
+                                    scrubPosition = pos
                                     isScrubbing = true
-                                    scrubPosition = it.toLong()
                                 },
-                                onValueChangeFinished = {
+                                onScrubChange = { pos ->
+                                    scrubPosition = pos
+                                    isScrubbing = true
+                                },
+                                onScrubFinished = { pos ->
+                                    scrubPosition = pos
+                                    seekTo(pos)
                                     isScrubbing = false
-                                    seekTo(scrubPosition)
                                 },
-                                valueRange = 0f..(durationSec.toFloat().coerceAtLeast(1f)),
-                                colors = SliderDefaults.colors(
-                                    thumbColor = playerAccent,
-                                    activeTrackColor = playerAccent,
-                                    inactiveTrackColor = Color(0x40FFFFFF)
-                                ),
-                                thumb = {
-                                    SliderDefaults.Thumb(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        colors = SliderDefaults.colors(thumbColor = playerAccent),
-                                        modifier = Modifier.size(seekThumbSize)
-                                    )
-                                },
-                                track = { sliderState ->
-                                    SliderDefaults.Track(
-                                        sliderState = sliderState,
-                                        colors = SliderDefaults.colors(
-                                            activeTrackColor = playerAccent,
-                                            inactiveTrackColor = Color(0x40FFFFFF)
-                                        ),
-                                        modifier = Modifier.height(seekTrackHeight)
-                                    )
-                                },
+                                formatTime = ::formatTime,
                                 modifier = Modifier
                                     .weight(1f)
-                                    .padding(horizontal = 8.dp)
+                                    .padding(horizontal = 4.dp)
                             )
 
+                            val rightTimeLabel = if (showRemainingTime && durationSec > 0L) {
+                                "-${formatTime((durationSec - displayedTimeSec).coerceAtLeast(0L))}"
+                            } else {
+                                formatTime(durationSec)
+                            }
                             Text(
-                                text = formatTime(durationSec),
+                                text = rightTimeLabel,
                                 color = Color.White,
                                 fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .clickable { showRemainingTime = !showRemainingTime }
+                                    .padding(horizontal = 2.dp, vertical = 2.dp)
                             )
                         }
 
@@ -3981,7 +3998,7 @@ private fun RemasteredPortraitPlayerSection(
             }
         }
 
-        // Share Pill (Section 1 requirement: friendly message "Sharing is coming soon!")
+        // Share Pill
         item {
             Row(
                 modifier = Modifier
@@ -3989,7 +4006,15 @@ private fun RemasteredPortraitPlayerSection(
                     .background(DarkSurfaceVariant)
                     .border(0.8.dp, DarkBorder, RoundedCornerShape(20.dp))
                     .clickable {
-                        Toast.makeText(context, "Sharing is coming soon!", Toast.LENGTH_SHORT).show()
+                        val targetAnime = anime
+                        if (targetAnime != null) {
+                            ShareUtils.shareAnime(
+                                context = context,
+                                anime = targetAnime,
+                                titleLanguagePreference = savedSettings.titleLanguagePreference,
+                                episodeNumber = currentEpisodeNumber
+                            )
+                        }
                     }
                     .padding(horizontal = 11.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -3997,30 +4022,16 @@ private fun RemasteredPortraitPlayerSection(
                 Icon(
                     imageVector = Icons.Default.Share,
                     contentDescription = "Share",
-                    tint = TextSecondary,
+                    tint = themeAccent,
                     modifier = Modifier.size(14.dp)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(5.dp))
                 Text(
                     text = "Share",
                     color = TextPrimary,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(themeAccent.copy(alpha = 0.2f))
-                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                ) {
-                    Text(
-                        text = "Soon",
-                        color = themeAccent,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
             }
         }
     }

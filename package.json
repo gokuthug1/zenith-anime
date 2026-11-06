@@ -1,6 +1,6 @@
 {
   "name": "zenith-anime-web",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Zenith Anime Web — Modern, local-first anime streaming client for web browsers across PC, Laptop, Tablet, and Mobile.",
   "scripts": {
     "start": "npx serve docs",

@@ -149,6 +149,8 @@
   }
 
   const API = {
+    queryAniList: executeGraphql,
+
     // ---- HOME CATALOG FEEDS ----
     async getTrending(page = 1, perPage = 20) {
       const query = `
@@ -436,7 +438,7 @@
       }
     },
 
-    // ---- ANIME REVIEWS (ANILIST PRIMARY + SILENT JIKAN FALLBACK) ----
+    // ---- ANIME REVIEWS (ANILIST PRIMARY + JIKAN MAL FALLBACK) ----
     async getMalReviews(malId, animeId) {
       if (!malId && !animeId) return [];
       const cacheKey = `anime_reviews_${animeId || malId}`;
@@ -445,79 +447,106 @@
 
       const targetAnimeId = animeId && animeId !== '0' ? parseInt(animeId, 10) : null;
       const targetMalId = malId && malId !== '0' ? parseInt(malId, 10) : null;
+      const collectedReviews = [];
+      let hadNetworkError = false;
 
-      // 1. Primary: Fetch from AniList GraphQL (Fast, reliable, zero timeouts)
+      // 1. Primary: Fetch from AniList GraphQL
       if (targetAnimeId || targetMalId) {
-        const query = `
-          query ($id: Int, $idMal: Int) {
-            Media(id: $id, idMal: $idMal, type: ANIME) {
-              id
-              reviews(page: 1, perPage: 8, sort: [RATING_DESC, ID_DESC]) {
-                nodes {
-                  id
-                  summary
-                  score
-                  rating
-                  ratingAmount
-                  body
-                  createdAt
-                  user {
-                    name
-                    avatar {
-                      medium
+        const query = targetAnimeId
+          ? `
+            query ($id: Int) {
+              Media(id: $id, type: ANIME) {
+                id
+                idMal
+                reviews(page: 1, perPage: 8, sort: [RATING_DESC, ID_DESC]) {
+                  nodes {
+                    id
+                    summary
+                    score
+                    rating
+                    ratingAmount
+                    body
+                    createdAt
+                    user {
+                      name
+                      avatar {
+                        medium
+                      }
                     }
                   }
                 }
               }
             }
-          }
-        `;
+          `
+          : `
+            query ($idMal: Int) {
+              Media(idMal: $idMal, type: ANIME) {
+                id
+                idMal
+                reviews(page: 1, perPage: 8, sort: [RATING_DESC, ID_DESC]) {
+                  nodes {
+                    id
+                    summary
+                    score
+                    rating
+                    ratingAmount
+                    body
+                    createdAt
+                    user {
+                      name
+                      avatar {
+                        medium
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          `;
 
         try {
-          const res = await this.queryAniList(query, {
-            id: targetAnimeId || undefined,
-            idMal: !targetAnimeId && targetMalId ? targetMalId : undefined
-          });
+          const variables = targetAnimeId ? { id: Number(animeId) } : { idMal: Number(malId) };
+          const res = await executeGraphql(query, variables);
 
           const nodes = res?.Media?.reviews?.nodes || [];
-          if (nodes.length > 0) {
-            const reviews = nodes.map((item, i) => {
-              const user = item.user || {};
-              const author = user.name || 'Anime Reviewer';
-              const avatar = user.avatar?.medium || '';
-              const score = item.score ? Math.round(item.score / 10) : 8;
-              const body = (item.body || item.summary || '').trim();
-              const firstLine = body.split('\n').filter(Boolean)[0] || '';
-              const summary = item.summary || (firstLine.length > 120 ? firstLine.slice(0, 120) + '...' : firstLine);
-              const rawDate = item.createdAt ? new Date(item.createdAt * 1000).toLocaleDateString() : '';
-              const helpful = item.rating || item.ratingAmount || 0;
+          nodes.forEach((item, i) => {
+            const user = item.user || {};
+            const author = user.name || 'AniList Reviewer';
+            const avatar = user.avatar?.medium || '';
+            const score = item.score ? Math.round(item.score / 10) : 8;
+            const body = (item.body || item.summary || '').trim();
+            if (!body) return;
+            const firstLine = body.split('\n').filter(Boolean)[0] || '';
+            const summary = (item.summary || (firstLine.length > 120 ? firstLine.slice(0, 120) + '...' : firstLine)).trim();
+            const rawDate = item.createdAt
+              ? new Date(item.createdAt * 1000).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+              : '';
+            const helpful = item.rating || item.ratingAmount || 0;
 
-              return {
-                id: String(item.id || i),
-                author,
-                avatarUrl: avatar,
-                score,
-                summary,
-                body,
-                date: rawDate,
-                isSpoiler: false,
-                episodesWatched: 0,
-                helpfulCount: helpful
-              };
+            collectedReviews.push({
+              id: `al_${item.id || i}`,
+              source: 'AniList',
+              author,
+              avatarUrl: avatar,
+              score,
+              summary,
+              body,
+              date: rawDate,
+              isSpoiler: /spoilers?/i.test(summary) && !/~!/.test(body),
+              episodesWatched: 0,
+              helpfulCount: helpful
             });
-
-            setCached(cacheKey, reviews);
-            return reviews;
-          }
-        } catch {
-          // Proceed to secondary fallback if AniList query fails
+          });
+        } catch (err) {
+          hadNetworkError = true;
+          console.warn('AniList review fetch error:', err);
         }
       }
 
-      // 2. Secondary Fallback: Jikan (with strict 2000ms timeout & silent catch to prevent console ERR_CONNECTION_TIMED_OUT)
-      if (targetMalId) {
+      // 2. Secondary / Supplement Fallback: Jikan (MyAnimeList) with 6000ms timeout
+      if (targetMalId && collectedReviews.length < 4) {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        const timeoutId = setTimeout(() => controller.abort(), 6000);
 
         try {
           const response = await fetch(`${JIKAN_URL}/anime/${targetMalId}/reviews?preliminary=true&spoilers=true`, {
@@ -528,46 +557,48 @@
             const json = await response.json();
             const data = json.data || [];
 
-            if (data.length > 0) {
-              const reviews = data.slice(0, 8).map((item, i) => {
-                const user = item.user || {};
-                const author = user.username || 'MAL Reviewer';
-                const avatar = user.images?.jpg?.image_url || '';
-                const score = item.score || 8;
-                const body = (item.review || '').trim();
-                const firstLine = body.split('\n').filter(Boolean)[0] || '';
-                const summary = firstLine.length > 120 ? firstLine.slice(0, 120) + '...' : firstLine;
-                const rawDate = item.date || '';
-                const date = rawDate.length >= 10 ? rawDate.slice(0, 10) : rawDate;
-                const helpful = item.reactions?.overall || item.reactions?.nice || 0;
+            data.slice(0, 8).forEach((item, i) => {
+              const user = item.user || {};
+              const author = user.username || 'MAL Reviewer';
+              const avatar = user.images?.jpg?.image_url || '';
+              const score = item.score || 8;
+              const body = (item.review || '').trim();
+              if (!body) return;
+              const firstLine = body.split('\n').filter(Boolean)[0] || '';
+              const summary = firstLine.length > 120 ? firstLine.slice(0, 120) + '...' : firstLine;
+              const rawDate = item.date || '';
+              const date = rawDate.length >= 10 ? rawDate.slice(0, 10) : rawDate;
+              const helpful = item.reactions?.overall || item.reactions?.nice || 0;
 
-                return {
-                  id: String(item.mal_id || i),
-                  author,
-                  avatarUrl: avatar,
-                  score,
-                  summary,
-                  body,
-                  date,
-                  isSpoiler: Boolean(item.is_spoiler),
-                  episodesWatched: item.episodes_watched || 0,
-                  helpfulCount: helpful
-                };
+              collectedReviews.push({
+                id: `mal_${item.mal_id || i}`,
+                source: 'MAL',
+                author,
+                avatarUrl: avatar,
+                score,
+                summary,
+                body,
+                date,
+                isSpoiler: Boolean(item.is_spoiler),
+                episodesWatched: item.episodes_watched || 0,
+                helpfulCount: helpful
               });
-
-              setCached(cacheKey, reviews);
-              return reviews;
-            }
+            });
+          } else {
+            hadNetworkError = true;
           }
         } catch {
-          // Silently ignore Jikan timeouts or CORS network failures without console warnings
+          hadNetworkError = true;
         } finally {
           clearTimeout(timeoutId);
         }
       }
 
-      setCached(cacheKey, []);
-      return [];
+      // Do not cache empty results if a network error happened
+      if (collectedReviews.length > 0 || !hadNetworkError) {
+        setCached(cacheKey, collectedReviews);
+      }
+      return collectedReviews;
     },
 
     // ---- ANIMETHEMES.MOE OPENINGS & ENDINGS ----

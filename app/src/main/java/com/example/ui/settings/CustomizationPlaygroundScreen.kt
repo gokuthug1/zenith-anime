@@ -1,6 +1,7 @@
 package com.example.ui.settings
 
 import android.widget.Toast
+import com.example.ui.player.ZenithVideoSeekBar
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -519,16 +520,20 @@ fun CustomizationPlaygroundScreen(
                 Spacer(modifier = Modifier.height(14.dp))
                 Text("SEEKBAR TIMELINE STYLE", color = activeAccentColor, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 Spacer(modifier = Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Modern", "Minimal", "Thick").forEach { styleOpt ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf("Modern", "Minimal", "Thick", "Neon", "Wave").forEach { styleOpt ->
                         val isSel = draftSeekbarStyle.equals(styleOpt, ignoreCase = true)
                         Box(
                             modifier = Modifier
-                                .weight(1f)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(if (isSel) activeAccentColor else MaterialTheme.colorScheme.surfaceVariant)
                                 .clickable { draftSeekbarStyle = styleOpt }
-                                .padding(vertical = 8.dp),
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {
                             Text(styleOpt, color = if (isSel) MaterialTheme.colorScheme.background else TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
@@ -972,34 +977,49 @@ private fun PlayerLivePreview(
                 Spacer(modifier = Modifier.height(4.dp))
             }
 
-            // Seekbar representation
-            val barHeight = when (seekbarStyle) {
-                "Minimal" -> 2.dp
-                "Thick" -> 6.dp
-                else -> 4.dp
+            // Interactive Seekbar representation
+            var simTimeSec by remember { androidx.compose.runtime.mutableLongStateOf(540L) }
+            var simScrubbing by remember { mutableStateOf(false) }
+            var simScrubSec by remember { androidx.compose.runtime.mutableLongStateOf(540L) }
+            fun formatSimTime(sec: Long): String {
+                val m = sec / 60L
+                val s = sec % 60L
+                return "%02d:%02d".format(m, s)
             }
+            val shownSec = if (simScrubbing) simScrubSec else simTimeSec
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("04:12", color = Color.White, fontSize = 9.sp)
-                Spacer(modifier = Modifier.width(6.dp))
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(barHeight)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(Color.White.copy(alpha = 0.3f))
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(0.38f)
-                            .height(barHeight)
-                            .background(accentColor)
-                    )
-                }
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("24:00", color = Color.White.copy(alpha = 0.7f), fontSize = 9.sp)
+                Text(formatSimTime(shownSec), color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                ZenithVideoSeekBar(
+                    currentTimeSec = simTimeSec,
+                    durationSec = 1440L,
+                    bufferedSec = (simTimeSec + 280L).coerceAtMost(1440L),
+                    isScrubbing = simScrubbing,
+                    scrubPositionSec = simScrubSec,
+                    seekbarStyle = seekbarStyle,
+                    accentColor = accentColor,
+                    introRangeSec = 85L..175L,
+                    outroRangeSec = 1320L..1440L,
+                    enabled = true,
+                    onScrubStart = { pos ->
+                        simScrubSec = pos
+                        simScrubbing = true
+                    },
+                    onScrubChange = { pos ->
+                        simScrubSec = pos
+                        simScrubbing = true
+                    },
+                    onScrubFinished = { pos ->
+                        simTimeSec = pos
+                        simScrubSec = pos
+                        simScrubbing = false
+                    },
+                    formatTime = ::formatSimTime,
+                    modifier = Modifier.weight(1f)
+                )
+                Text("24:00", color = Color.White.copy(alpha = 0.7f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

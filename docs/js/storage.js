@@ -45,6 +45,10 @@
     // ---- SETTINGS ----
     getSettings() {
       const saved = safeGet(KEYS.SETTINGS, {});
+      const standaloneAccent = localStorage.getItem('zenith_accent');
+      if (standaloneAccent && !saved.accent) {
+        saved.accent = standaloneAccent;
+      }
       return Object.assign({}, DEFAULT_SETTINGS, saved);
     },
 
@@ -52,9 +56,13 @@
       const current = this.getSettings();
       const updated = Object.assign({}, current, partial);
       safeSet(KEYS.SETTINGS, updated);
-      // Also update standalone accent key for backward compatibility
+      // Also update standalone accent key for cross-page compatibility with landing.html
       if (partial.accent) {
-        localStorage.setItem('zenith_accent', partial.accent);
+        try {
+          localStorage.setItem('zenith_accent', partial.accent);
+        } catch {
+          // ignore
+        }
       }
       return updated;
     },
@@ -224,7 +232,6 @@
 
     getLatestProgressForAnime(animeId) {
       const all = this.getAllProgress();
-      const prefix = `${animeId}_ep_`;
       const matches = Object.values(all).filter(p => p.animeId === String(animeId));
       if (matches.length === 0) return null;
       matches.sort((a, b) => (b.lastWatchedAt || 0) - (a.lastWatchedAt || 0));
@@ -239,9 +246,9 @@
       const existing = all[key] || {};
 
       const duration = data.durationSec || existing.durationSec || 1440; // ~24 min fallback
-      const currentTime = Math.max(0, data.currentTimeSec || 0);
-      const isCompleted = data.completed !== undefined 
-        ? data.completed 
+      const currentTime = Math.min(duration, Math.max(0, data.currentTimeSec || 0));
+      const isCompleted = data.completed !== undefined
+        ? data.completed
         : (duration > 0 && (currentTime / duration) >= 0.88);
 
       all[key] = {
@@ -273,6 +280,24 @@
       }
 
       return all[key];
+    },
+
+    toggleEpisodeWatched(anime, episodeNumber) {
+      if (!anime || !anime.id) return false;
+      const existing = this.getProgress(anime.id, episodeNumber);
+      const nextCompleted = !(existing && existing.completed);
+      const duration = existing?.durationSec || 1440;
+      this.saveProgress({
+        animeId: anime.id,
+        animeTitle: anime.title,
+        episodeNumber: Number(episodeNumber),
+        coverImage: anime.coverImage,
+        bannerImage: anime.bannerImage,
+        currentTimeSec: nextCompleted ? duration : (existing?.currentTimeSec || 0),
+        durationSec: duration,
+        completed: nextCompleted
+      });
+      return nextCompleted;
     },
 
     deleteProgress(animeId, episodeNumber) {

@@ -3,11 +3,14 @@ package com.example
 import android.Manifest
 import android.app.ActivityManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import android.widget.Toast
+import com.example.data.util.DeepLinkTarget
+import com.example.data.util.ShareUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -72,9 +75,13 @@ import com.example.ui.sync.MalSyncScreen
 import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
+    private var deepLinkTargetState by mutableStateOf<DeepLinkTarget?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        deepLinkTargetState = ShareUtils.parseDeepLink(intent)
 
         val imageLoader = ImageLoader.Builder(applicationContext)
             .components {
@@ -118,19 +125,54 @@ class MainActivity : ComponentActivity() {
                 amoled = settings.amoledMode,
                 appSettings = settings
             ) {
-                MainApp(repository = repository, settings = settings)
+                MainApp(
+                    repository = repository,
+                    settings = settings,
+                    deepLinkTarget = deepLinkTargetState,
+                    onDeepLinkConsumed = { deepLinkTargetState = null }
+                )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val parsed = ShareUtils.parseDeepLink(intent)
+        if (parsed != null) {
+            deepLinkTargetState = parsed
         }
     }
 }
 
 @Composable
-fun MainApp(repository: AnimeRepository, settings: com.example.data.model.AppSettings) {
+fun MainApp(
+    repository: AnimeRepository,
+    settings: com.example.data.model.AppSettings,
+    deepLinkTarget: DeepLinkTarget? = null,
+    onDeepLinkConsumed: () -> Unit = {}
+) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
-    var showSplash by remember { mutableStateOf(true) }
+    var showSplash by remember { mutableStateOf(deepLinkTarget == null) }
     val bgColor = MaterialTheme.colorScheme.background
+
+    LaunchedEffect(deepLinkTarget) {
+        val target = deepLinkTarget ?: return@LaunchedEffect
+        showSplash = false
+        val detailsRoute = Screen.Details.createRoute(target.animeId)
+        navController.navigate(detailsRoute) {
+            launchSingleTop = true
+        }
+        if (target.episodeNumber != null && target.episodeNumber > 0) {
+            val lang = settings.defaultLanguage.ifBlank { "sub" }
+            navController.navigate(Screen.Player.createRoute(target.animeId, target.episodeNumber, lang)) {
+                launchSingleTop = true
+            }
+        }
+        onDeepLinkConsumed()
+    }
 
     LaunchedEffect(Unit) {
         repository.freshStartWipe()
@@ -396,6 +438,12 @@ fun MainApp(repository: AnimeRepository, settings: com.example.data.model.AppSet
                         repository = repository,
                         onBackClick = {
                             navController.popBackStack()
+                        },
+                        onAnimeClick = { animeId ->
+                            navController.navigate(Screen.Details.createRoute(animeId))
+                        },
+                        onDownloadsClick = {
+                            navController.navigate(Screen.Download.route)
                         }
                     )
                 }

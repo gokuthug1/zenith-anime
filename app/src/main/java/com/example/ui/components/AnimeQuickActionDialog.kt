@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.Anime
 import com.example.data.model.WatchStatus
+import com.example.data.util.ShareUtils
 import com.example.ui.theme.AccentRed
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.LocalAppSettings
@@ -236,24 +237,15 @@ fun AnimeQuickActionDialog(
                     tint = TextPrimary,
                     onClick = {
                         onDismiss()
-                        val link = if (anime.malId.isNotBlank() && anime.malId != "0") {
-                            "https://myanimelist.net/anime/${anime.malId}"
+                        if (onShare != null) {
+                            onShare()
                         } else {
-                            "https://anilist.co/anime/${anime.id.removePrefix("mal_")}"
+                            ShareUtils.shareAnime(
+                                context = context,
+                                anime = anime,
+                                titleLanguagePreference = appSettings.titleLanguagePreference
+                            )
                         }
-                        val shareText = buildString {
-                            append("$displayTitle (★ ${anime.rating} • ${anime.type} • ${anime.year})")
-                            if (anime.genres.isNotBlank()) append("\nGenres: ${anime.genres}")
-                            val snippet = anime.synopsis.trim().take(180)
-                            if (snippet.isNotBlank()) append("\n\n$snippet${if (anime.synopsis.length > 180) "…" else ""}")
-                            append("\n\n$link")
-                        }
-                        val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_SUBJECT, displayTitle)
-                            putExtra(Intent.EXTRA_TEXT, shareText)
-                        }
-                        context.startActivity(Intent.createChooser(sendIntent, "Share $displayTitle"))
                     }
                 )
             }

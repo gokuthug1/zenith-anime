@@ -225,7 +225,7 @@ fun DownloadScreen(
                 Icon(
                     imageVector = Icons.Default.Search,
                     contentDescription = "Search",
-                    tint = Color.White
+                    tint = MaterialTheme.colorScheme.onBackground
                 )
             }
         }
@@ -574,7 +574,7 @@ fun DownloadCardItem(
             if (item.status == "DOWNLOADING" || item.status == "PENDING" || item.status == "QUEUED") {
                 Spacer(modifier = Modifier.height(4.dp))
                 LinearProgressIndicator(
-                    progress = (item.progress / 100f).coerceIn(0f, 1f),
+                    progress = { (item.progress / 100f).coerceIn(0f, 1f) },
                     color = themeAccent,
                     trackColor = MaterialTheme.colorScheme.surfaceVariant,
                     modifier = Modifier

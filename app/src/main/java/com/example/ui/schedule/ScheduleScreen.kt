@@ -458,9 +458,6 @@ fun ScheduleScreen(
                     Toast.makeText(context, "Moved to ${status.displayName}", Toast.LENGTH_SHORT).show()
                 }
             },
-            onShare = {
-                Toast.makeText(context, "Sharing is coming soon!", Toast.LENGTH_SHORT).show()
-            },
             onDownload = {
                 scope.launch {
                     val ep = com.example.data.model.Episode(

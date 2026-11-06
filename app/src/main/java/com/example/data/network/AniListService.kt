@@ -518,11 +518,32 @@ class AniListService {
         if (resolvedMalId == null && animeId.startsWith("mal_")) {
             resolvedMalId = animeId.removePrefix("mal_").trim().takeIf { it.isNotEmpty() && it != "0" }
         }
-        if (resolvedMalId != null) {
-            val jikanReviews = fetchJikanReviews(resolvedMalId)
-            if (jikanReviews.isNotEmpty()) return@withContext jikanReviews
-        }
-        fetchAniListReviewsFallback(animeId, resolvedMalId)
+        val jikanReviews = if (resolvedMalId != null) fetchJikanReviews(resolvedMalId) else emptyList()
+        val aniListReviews = fetchAniListReviewsFallback(animeId, resolvedMalId)
+        val combined = (jikanReviews + aniListReviews).distinctBy { it.id }
+        combined.ifEmpty { aniListReviews }
+    }
+
+    private fun decodeReviewHtmlEntities(input: String): String {
+        return input
+            .replace("\\r\\n", "\n")
+            .replace("\\n", "\n")
+            .replace("\r\n", "\n")
+            .replace("&quot;", "\"")
+            .replace("&#039;", "'")
+            .replace("&#39;", "'")
+            .replace("&apos;", "'")
+            .replace("&rsquo;", "’")
+            .replace("&lsquo;", "‘")
+            .replace("&rdquo;", "”")
+            .replace("&ldquo;", "“")
+            .replace("&mdash;", "—")
+            .replace("&ndash;", "–")
+            .replace("&hellip;", "…")
+            .replace("&nbsp;", " ")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
     }
 
     internal fun parseJikanReviewsJson(jsonString: String): List<MalReview> {
@@ -542,12 +563,15 @@ class AniListService {
                 val score = item.optInt("score", 8).coerceIn(1, 10)
                 val rawReview = item.optString("review", "").trim()
                 if (rawReview.isBlank()) continue
-                val cleanBody = rawReview
-                    .replace("\\r\\n", "\n")
-                    .replace("\\n", "\n")
-                    .trim()
-                val firstSentence = cleanBody.lineSequence().firstOrNull { it.isNotBlank() }
-                    ?.take(110)
+                val cleanBody = decodeReviewHtmlEntities(rawReview).trim()
+                val plainSummarySource = cleanBody
+                    .replace(Regex("\\[/?[a-zA-Z0-9= _\"'-]+\\]"), "")
+                    .replace(Regex("img\\d*%?\\([^)]*\\)", RegexOption.IGNORE_CASE), "")
+                    .replace(Regex("!\\[[^\\]]*\\]\\([^)]*\\)"), "")
+                    .replace("~~~", "")
+                val firstSentence = plainSummarySource.lineSequence().firstOrNull { it.isNotBlank() }
+                    ?.trim()
+                    ?.take(120)
                     .orEmpty()
                 val rawDate = item.optString("date", "")
                 val date = if (rawDate.length >= 10) rawDate.substring(0, 10) else rawDate
@@ -650,6 +674,7 @@ class AniListService {
                     ?.optJSONArray("nodes")
                     ?: return emptyList()
 
+                val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US)
                 val out = mutableListOf<MalReview>()
                 for (i in 0 until nodes.length()) {
                     val node = nodes.optJSONObject(i) ?: continue
@@ -659,12 +684,18 @@ class AniListService {
                     val avatar = user?.optJSONObject("avatar")?.optString("large").orEmpty()
                     val rawScore = node.optInt("score", 80)
                     val score10 = (rawScore / 10).coerceIn(1, 10)
-                    val summary = node.optString("summary", "").trim()
-                    val rawBody = node.optString("body", "")
-                        .replace(Regex("<[^>]*>"), "")
-                        .replace(Regex("~![\\s\\S]*?!~"), "[Spoiler]")
+                    val summary = decodeReviewHtmlEntities(node.optString("summary", "")).trim()
+                    val rawBody = decodeReviewHtmlEntities(node.optString("body", ""))
+                        .replace(Regex("<br\\s*/?>", RegexOption.IGNORE_CASE), "\n")
+                        .replace(Regex("<hr\\s*/?>", RegexOption.IGNORE_CASE), "\n---\n")
+                        .replace(Regex("</p>", RegexOption.IGNORE_CASE), "\n\n")
+                        .replace(Regex("<img[^>]+src=[\"'](https?://[^\"']+)[\"'][^>]*>", RegexOption.IGNORE_CASE), "\n![]($1)\n")
                         .trim()
                     if (rawBody.isBlank() && summary.isBlank()) continue
+                    val createdAtSec = node.optLong("createdAt", 0L)
+                    val dateStr = if (createdAtSec > 0L) {
+                        try { dateFormat.format(java.util.Date(createdAtSec * 1000L)) } catch (_: Exception) { "" }
+                    } else ""
                     val rating = node.optInt("rating", 0)
                     out += MalReview(
                         id = "ani_rev_$id",
@@ -673,12 +704,12 @@ class AniListService {
                         score = score10,
                         summary = summary,
                         body = rawBody.ifBlank { summary },
-                        date = "",
+                        date = dateStr,
                         isSpoiler = false,
                         isPreliminary = false,
                         episodesWatched = 0,
                         helpfulCount = rating,
-                        source = "MyAnimeList / Community"
+                        source = "AniList"
                     )
                 }
                 out

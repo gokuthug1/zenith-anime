@@ -954,9 +954,6 @@ fun HomeScreen(
                         repository.addDownload(target, ep)
                         Toast.makeText(context, "Saved Episode 1 for offline", Toast.LENGTH_SHORT).show()
                     }
-                },
-                onShare = {
-                    Toast.makeText(context, "Sharing is coming soon!", Toast.LENGTH_SHORT).show()
                 }
             )
         }

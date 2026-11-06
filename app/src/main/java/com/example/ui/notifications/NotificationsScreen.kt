@@ -73,11 +73,14 @@ import kotlinx.coroutines.launch
 fun NotificationsScreen(
     repository: AnimeRepository,
     onBackClick: () -> Unit,
+    onAnimeClick: ((String) -> Unit)? = null,
+    onDownloadsClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val themeAccent = LocalThemeAccent.current
     val notifications by repository.allNotifications.collectAsState(initial = emptyList())
+    val allAnime by repository.allAnime.collectAsState(initial = emptyList())
     val settings by repository.settings.collectAsState(initial = repository.settingsManager.getSettings())
     val scope = rememberCoroutineScope()
     var showClearConfirm by remember { mutableStateOf(false) }
@@ -101,7 +104,7 @@ fun NotificationsScreen(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
-                    tint = Color.White
+                    tint = MaterialTheme.colorScheme.onBackground
                 )
             }
 
@@ -171,7 +174,7 @@ fun NotificationsScreen(
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
                     .fillMaxSize()
                     .navigationBarsPadding()
@@ -182,6 +185,20 @@ fun NotificationsScreen(
                         onClick = {
                             scope.launch {
                                 repository.markNotificationRead(notif.id)
+                            }
+                            val encodedAnimeId = if (notif.id.startsWith("notif_aid_")) {
+                                val rest = notif.id.removePrefix("notif_aid_")
+                                rest.substringBefore("_").takeIf { it.isNotBlank() }
+                            } else null
+                            val matchedAnimeId = encodedAnimeId ?: allAnime.firstOrNull { a ->
+                                (notif.animeThumbnail.isNotBlank() && a.coverImage == notif.animeThumbnail) ||
+                                    notif.title.contains(a.title, ignoreCase = true) ||
+                                    notif.message.contains(a.title, ignoreCase = true)
+                            }?.id
+                            if (matchedAnimeId != null && onAnimeClick != null) {
+                                onAnimeClick(matchedAnimeId)
+                            } else if (notif.tag.equals("DOWNLOAD", ignoreCase = true) && onDownloadsClick != null) {
+                                onDownloadsClick()
                             }
                         },
                         onDismiss = {
@@ -259,8 +276,11 @@ fun NotificationItemCard(
         modifier = modifier
             .fillMaxWidth()
             .scale(scale)
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (notification.isUnread) MaterialTheme.colorScheme.surface else Color.Transparent)
+            .clip(RoundedCornerShape(14.dp))
+            .background(
+                if (notification.isUnread) MaterialTheme.colorScheme.surface
+                else MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+            )
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = ripple(bounded = true, color = themeAccent),
@@ -270,7 +290,7 @@ fun NotificationItemCard(
                     onLongClick?.invoke()
                 }
             )
-            .padding(vertical = 4.dp, horizontal = 4.dp),
+            .padding(vertical = 10.dp, horizontal = 12.dp),
         verticalAlignment = Alignment.Top
     ) {
         AsyncImage(

@@ -680,8 +680,9 @@ class AnimeRepository(private val context: Context) {
         coverImage: String = "",
         episodeNumber: Int = 1
     ) = withContext(Dispatchers.IO) {
+        val idPrefix = if (animeId.isNotBlank()) "notif_aid_${animeId}_" else "notif_"
         val notif = AppNotification(
-            id = "notif_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}",
+            id = "${idPrefix}${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}",
             title = title,
             message = message,
             timestamp = "Just now",

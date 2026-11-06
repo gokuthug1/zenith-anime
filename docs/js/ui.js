@@ -2,7 +2,8 @@
  * Zenith Anime Web — UI & Screen Rendering Engine
  * Translates the Android Jetpack Compose UI/UX into clean, responsive web views:
  * Home (Spotlight Carousel, Continue Watching, Trending, Top Rated), Search,
- * Anime Details (Segmented tabs, MAL reviews, AnimeThemes), Schedule, My List, Settings, and Modals.
+ * Anime Details (Segmented tabs, Rich AniList/MAL reviews, AnimeThemes),
+ * Watch (Auto-scrolling Episode Guide, Share, Open in App), Schedule, My List, Settings, and Modals.
  */
 
 (function (window) {
@@ -12,9 +13,17 @@
     heroInterval: null,
     heroIndex: 0,
     heroAnimeList: [],
+    escapeBound: false,
 
     init() {
-      // Nothing needed on startup
+      if (!this.escapeBound) {
+        this.escapeBound = true;
+        document.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            this.closeModal();
+          }
+        });
+      }
     },
 
     // ---- TOAST SYSTEM ----
@@ -44,16 +53,17 @@
 
     // ---- MODAL SYSTEM ----
     openModal(title, bodyHtml) {
+      this.init();
       let overlay = document.getElementById('zenith-global-modal');
       if (!overlay) {
         overlay = document.createElement('div');
         overlay.id = 'zenith-global-modal';
         overlay.className = 'modal-backdrop';
         overlay.innerHTML = `
-          <div class="modal-dialog">
+          <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="modal-title">
             <div class="modal-header">
               <h3 id="modal-title"></h3>
-              <button type="button" class="modal-close" id="modal-close-btn">&times;</button>
+              <button type="button" class="modal-close" id="modal-close-btn" aria-label="Close modal">&times;</button>
             </div>
             <div class="modal-body" id="modal-body"></div>
           </div>
@@ -73,7 +83,242 @@
 
     closeModal() {
       const overlay = document.getElementById('zenith-global-modal');
-      overlay?.classList.remove('open');
+      if (!overlay) return;
+
+      // Pause and unload any active media (prevents audio leak when closing AnimeThemes modal)
+      overlay.querySelectorAll('video, audio').forEach(media => {
+        try {
+          media.pause();
+          media.removeAttribute('src');
+          media.load();
+        } catch {
+          // ignore
+        }
+      });
+
+      const body = document.getElementById('modal-body');
+      if (body) body.innerHTML = '';
+      overlay.classList.remove('open');
+    },
+
+    // ---- UNIVERSAL SHARE HELPER ----
+    shareAnime(anime, episodeNumber = null) {
+      if (!anime) return;
+      const titleLang = window.ZenithStorage?.getSettings().titleLanguage || 'english';
+      const displayTitle = (titleLang === 'romaji' ? anime.romajiTitle : anime.englishTitle) || anime.title;
+      const shareUrl = window.ZenithApp?.buildShareUrl
+        ? window.ZenithApp.buildShareUrl(anime.id, episodeNumber)
+        : `${window.location.origin}${window.location.pathname}?anime=${anime.id}${episodeNumber ? `&ep=${episodeNumber}` : ''}#${episodeNumber ? `watch/${anime.id}/${episodeNumber}` : `details/${anime.id}`}`;
+
+      const shareTitle = episodeNumber
+        ? `${displayTitle} — Episode ${episodeNumber} | Zenith Anime`
+        : `${displayTitle} | Zenith Anime`;
+      const shareText = episodeNumber
+        ? `Watch ${displayTitle} Episode ${episodeNumber} on Zenith Anime (Web & Android App)`
+        : `Stream ${displayTitle} on Zenith Anime (Web & Android App)`;
+
+      if (navigator.share) {
+        navigator.share({
+          title: shareTitle,
+          text: shareText,
+          url: shareUrl
+        }).catch(() => {});
+      } else if (navigator.clipboard) {
+        navigator.clipboard.writeText(shareUrl).then(() => {
+          this.showToast('Copied universal share link to clipboard!');
+        }).catch(() => {
+          this.showToast('Share link ready: ' + shareUrl);
+        });
+      } else {
+        this.showToast('Share link: ' + shareUrl);
+      }
+    },
+
+    // ---- RICH REVIEW BODY PARSER (ANILIST MARKDOWN/HTML + MAL BBCODE) ----
+    formatReviewBody(rawText) {
+      if (!rawText) return '<p class="review-p">No review text provided.</p>';
+
+      let text = String(rawText).replace(/\r\n?/g, '\n').trim();
+
+      // 1. Decode HTML entities so encoded AniList/MAL tags & punctuation normalize cleanly
+      const entityMap = {
+        '&quot;': '"',
+        '&#039;': "'",
+        '&#39;': "'",
+        '&apos;': "'",
+        '&lt;': '<',
+        '&gt;': '>',
+        '&nbsp;': ' ',
+        '&mdash;': '—',
+        '&ndash;': '–',
+        '&hellip;': '…',
+        '&amp;': '&'
+      };
+      text = text
+        .replace(/&(quot|#0?39|apos|lt|gt|nbsp|mdash|ndash|hellip|amp);/gi, (m) => entityMap[m.toLowerCase()] || m)
+        .replace(/&#(\d+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
+        .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+
+      // 2. Strip any dangerous script/style/iframe/object tags
+      text = text
+        .replace(/<(script|style|iframe|object|embed|form)[\s\S]*?<\/\1>/gi, '')
+        .replace(/<(script|style|iframe|object|embed|form)[^>]*\/?>/gi, '');
+
+      // Token store for safe HTML replacements (images, links, spoilers)
+      const tokens = [];
+      const addToken = (html) => {
+        const key = `@@ZENITH_REV_TOK_${tokens.length}@@`;
+        tokens.push(html);
+        return key;
+      };
+
+      const buildImageFigure = (url, widthSpec) => {
+        const cleanUrl = String(url || '').trim().replace(/["'<>]/g, '');
+        if (!/^https?:\/\//i.test(cleanUrl)) return '';
+        let styleAttr = 'max-width: 100%;';
+        if (widthSpec) {
+          const spec = String(widthSpec).trim();
+          if (spec.endsWith('%')) {
+            const pct = Math.min(100, Math.max(15, parseInt(spec, 10) || 100));
+            styleAttr = `width: ${pct}%; max-width: 100%;`;
+          } else {
+            const px = Math.min(760, Math.max(80, parseInt(spec, 10) || 0));
+            if (px > 0) styleAttr = `width: ${px}px; max-width: 100%;`;
+          }
+        }
+        return addToken(
+          `<figure class="review-inline-figure"><img class="review-inline-img" src="${cleanUrl}" style="${styleAttr}" loading="lazy" alt="Review illustration" referrerpolicy="no-referrer" onerror="this.closest('figure').style.display='none'" /></figure>`
+        );
+      };
+
+      // 3. Extract inline images:
+      // 3a. AniList img(url), img220(url), img400(url), img50%(url)
+      text = text.replace(/\bimg(\d+%?)?\(\s*(https?:\/\/[^\s)]+)\s*\)/gi, (_, w, url) => buildImageFigure(url, w));
+
+      // 3b. BBCode [img]url[/img] or [img=WxH]url[/img] or [img width=...]url[/img]
+      text = text.replace(/\[img(?:=([0-9]+)(?:x[0-9]+)?|\s+width=["']?([0-9]+)["']?)?\s*\](https?:\/\/[^\s[\]]+)\[\/img\]/gi, (_, w1, w2, url) => {
+        return buildImageFigure(url, w1 || w2);
+      });
+
+      // 3c. Markdown ![alt](url)
+      text = text.replace(/!\[([^\]]*)\]\(\s*(https?:\/\/[^\s)]+)\s*\)/gi, (_, _alt, url) => buildImageFigure(url, null));
+
+      // 3d. HTML <img src="url" width="...">
+      text = text.replace(/<img\b[^>]*?\bsrc=["'](https?:\/\/[^"']+)["'][^>]*>/gi, (fullMatch, url) => {
+        const wMatch = fullMatch.match(/\bwidth=["']?(\d+%?)["']?/i);
+        return buildImageFigure(url, wMatch ? wMatch[1] : null);
+      });
+
+      // 4. Normalize safe HTML tags in AniList reviews into BBCode/Markdown equivalents before escaping
+      text = text
+        .replace(/<center>([\s\S]*?)<\/center>/gi, '[center]$1[/center]')
+        .replace(/<(?:b|strong)>([\s\S]*?)<\/(?:b|strong)>/gi, '[b]$1[/b]')
+        .replace(/<(?:i|em)>([\s\S]*?)<\/(?:i|em)>/gi, '[i]$1[/i]')
+        .replace(/<u>([\s\S]*?)<\/u>/gi, '[u]$1[/u]')
+        .replace(/<(?:s|strike|del)>([\s\S]*?)<\/(?:s|strike|del)>/gi, '[s]$1[/s]')
+        .replace(/<blockquote>([\s\S]*?)<\/blockquote>/gi, '[quote]$1[/quote]')
+        .replace(/<h1[^>]*>([\s\S]*?)<\/h1>/gi, '\n# $1\n')
+        .replace(/<h2[^>]*>([\s\S]*?)<\/h2>/gi, '\n## $1\n')
+        .replace(/<h3[^>]*>([\s\S]*?)<\/h3>/gi, '\n### $1\n')
+        .replace(/<h4[^>]*>([\s\S]*?)<\/h4>/gi, '\n#### $1\n')
+        .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '\n- $1')
+        .replace(/<\/?(?:ul|ol)[^>]*>/gi, '\n')
+        .replace(/<hr\s*\/?>/gi, '\n---\n')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>\s*<p[^>]*>/gi, '\n\n')
+        .replace(/<\/?p[^>]*>/gi, '\n');
+
+      // 5. Extract Links (HTML <a>, Markdown [text](url), BBCode [url=...]...[/url])
+      const buildSafeLink = (url, label) => {
+        const cleanUrl = String(url || '').trim().replace(/["'<>]/g, '');
+        if (!/^https?:\/\//i.test(cleanUrl)) return label || cleanUrl;
+        const safeLabel = String(label || cleanUrl)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+        return addToken(`<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="review-link">${safeLabel}</a>`);
+      };
+
+      text = text.replace(/<a\b[^>]*?\bhref=["'](https?:\/\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, url, label) => buildSafeLink(url, label));
+      text = text.replace(/\[([^\][\n]+)\]\(\s*(https?:\/\/[^\s)]+)\s*\)/g, (_, label, url) => buildSafeLink(url, label));
+      text = text.replace(/\[url=(https?:\/\/[^\]]+)\]([\s\S]*?)\[\/url\]/gi, (_, url, label) => buildSafeLink(url, label));
+      text = text.replace(/\[url\](https?:\/\/[^\s[\]]+)\[\/url\]/gi, (_, url) => buildSafeLink(url, url));
+
+      // 6. Escape any remaining raw HTML characters
+      text = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      // 7. Convert AniList & BBCode Spoiler blocks (~! ... !~ and [spoiler]...[/spoiler])
+      const renderSpoiler = (_, inner) => {
+        const cleaned = inner.trim();
+        return addToken(
+          `<span class="review-spoiler" onclick="this.classList.toggle('revealed')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.classList.toggle('revealed');}" role="button" tabindex="0" title="Click to reveal spoiler"><span class="review-spoiler-label">Spoiler</span><span class="review-spoiler-content">${cleaned}</span></span>`
+        );
+      };
+      text = text.replace(/~!\s*([\s\S]*?)\s*!~/g, renderSpoiler);
+      text = text.replace(/\[spoiler(?:=[^\]]*)?\]([\s\S]*?)\[\/spoiler\]/gi, renderSpoiler);
+
+      // 8. Convert Centering blocks (~~~ ... ~~~ and [center]...[/center])
+      text = text.replace(/~~~\s*([\s\S]*?)\s*~~~/g, '<div class="review-center">$1</div>');
+      text = text.replace(/\[center\]([\s\S]*?)\[\/center\]/gi, '<div class="review-center">$1</div>');
+
+      // 9. Convert Blockquotes ([quote]...[/quote] and > lines)
+      text = text.replace(/\[quote(?:=[^\]]*)?\]([\s\S]*?)\[\/quote\]/gi, '<blockquote class="review-quote">$1</blockquote>');
+      text = text.replace(/(?:^|\n)&gt;\s?([^\n]+)(?=\n|$)/g, '\n<blockquote class="review-quote">$1</blockquote>');
+
+      // 10. Convert Headers (#, ##, ###, ####) and [size=...] headings
+      text = text.replace(/\[size=(?:1[5-9]|[2-9]\d)\]([\s\S]*?)\[\/size\]/gi, '<h4 class="review-heading">$1</h4>');
+      text = text.replace(/\[\/?size(?:=[^\]]*)?\]/gi, '');
+      text = text.replace(/\[\/?color(?:=[^\]]*)?\]/gi, '');
+      text = text.replace(/(?:^|\n)####\s+([^\n]+)/g, '\n<h4 class="review-heading">$1</h4>');
+      text = text.replace(/(?:^|\n)###\s+([^\n]+)/g, '\n<h4 class="review-heading">$1</h4>');
+      text = text.replace(/(?:^|\n)##\s+([^\n]+)/g, '\n<h3 class="review-heading">$1</h3>');
+      text = text.replace(/(?:^|\n)#\s+([^\n]+)/g, '\n<h3 class="review-heading">$1</h3>');
+
+      // 11. Horizontal rules (---, ***, ___, [hr])
+      text = text.replace(/\[hr\]/gi, '<hr class="review-hr">');
+      text = text.replace(/(?:^|\n)[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*(?=\n|$)/g, '\n<hr class="review-hr">\n');
+
+      // 12. Bold, Italic, Underline, Strikethrough (BBCode & Markdown)
+      text = text.replace(/\[b\]([\s\S]*?)\[\/b\]/gi, '<strong>$1</strong>');
+      text = text.replace(/\*\*([^\n*]+?)\*\*/g, '<strong>$1</strong>');
+      text = text.replace(/__([^\n_]+?)__/g, '<strong>$1</strong>');
+
+      text = text.replace(/\[i\]([\s\S]*?)\[\/i\]/gi, '<em>$1</em>');
+      text = text.replace(/\*([^\n*]+?)\*/g, '<em>$1</em>');
+      text = text.replace(/\b_([^\n_]+?)_\b/g, '<em>$1</em>');
+
+      text = text.replace(/\[u\]([\s\S]*?)\[\/u\]/gi, '<u>$1</u>');
+      text = text.replace(/\[s\]([\s\S]*?)\[\/s\]/gi, '<del>$1</del>');
+      text = text.replace(/~~([^\n~]+?)~~/g, '<del>$1</del>');
+
+      // 13. Lists (- item, * item, [*] item)
+      text = text.replace(/\[\/?list(?:=[^\]]*)?\]/gi, '\n');
+      text = text.replace(/(?:^|\n)[ \t]*(?:[-*]|\[\*\])[ \t]+([^\n]+)/g, '\n<li class="review-list-item">$1</li>');
+      text = text.replace(/(?:<li class="review-list-item">[\s\S]*?<\/li>\n?)+/g, (match) => `<ul class="review-list">${match}</ul>`);
+
+      // 14. Clean paragraph & line-break assembly
+      const paragraphs = text
+        .split(/\n{2,}/)
+        .map(p => p.trim())
+        .filter(Boolean)
+        .map(p => {
+          if (/^<(?:div|figure|blockquote|h3|h4|hr|ul)/i.test(p)) {
+            return p.replace(/\n/g, '<br>');
+          }
+          return `<p class="review-p">${p.replace(/\n/g, '<br>')}</p>`;
+        });
+
+      let finalHtml = paragraphs.join('');
+
+      // 15. Restore tokenized elements (spoilers may contain formatted text or links, so run twice)
+      for (let pass = 0; pass < 2; pass++) {
+        finalHtml = finalHtml.replace(/@@ZENITH_REV_TOK_(\d+)@@/g, (_, idx) => tokens[Number(idx)] || '');
+      }
+
+      return finalHtml;
     },
 
     // ---- ANIME CARD COMPONENT ----
@@ -88,7 +333,7 @@
       return `
         <article class="anime-card" data-id="${anime.id}" tabindex="0" role="button" aria-label="${displayTitle}">
           <div class="card-poster-wrapper">
-            <img class="card-poster" src="${anime.coverImage}" alt="${displayTitle}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'200\' height=\'300\' fill=\'%23141b27\'><rect width=\'200\' height=\'300\'/><text x=\'50%\' y=\'50%\' fill=\'%2394a3b8\' text-anchor=\'middle\'>No Image</text></svg>'">
+            <img class="card-poster" src="${anime.coverImage}" alt="${displayTitle}" loading="lazy" onerror="this.src='data:image/svg+xml;utf8,<svg xmlns=\\'http://www.w3.org/2000/svg\\' width=\\'200\\' height=\\'300\\' fill=\\'%23141b27\\'><rect width=\\'200\\' height=\\'300\\'/><text x=\\'50%\\' y=\\'50%\\' fill=\\'%2394a3b8\\' text-anchor=\\'middle\\'>No Image</text></svg>'">
             ${rank}
             <div class="card-badges-top">
               ${score ? `<span class="badge-score">${score}</span>` : ''}
@@ -117,6 +362,7 @@
     // ---- 1. HOME SCREEN ----
     async renderHomeScreen(container) {
       clearInterval(this.heroInterval);
+      this.heroInterval = null;
       container.innerHTML = `
         <div class="home-screen-skeleton">
           <div class="skeleton-hero"></div>
@@ -174,17 +420,17 @@
               </div>
             </section>
 
-            <!-- Top 10 Trending This Week -->
+            <!-- Top Trending This Week (12 items for clean 2/3/4/6-col grid balance) -->
             <section class="catalog-section">
               <div class="section-title-row">
                 <div class="section-title-left">
                   <span class="section-dot"></span>
-                  <h2 class="section-heading">Top 10 Trending This Week</h2>
+                  <h2 class="section-heading">Trending This Week</h2>
                 </div>
                 <a href="#search?sort=trending" class="section-more-link">See All &rarr;</a>
               </div>
               <div class="anime-cards-grid">
-                ${trending.slice(0, 10).map((a, idx) => this.renderAnimeCard(a, { rank: idx + 1 })).join('')}
+                ${trending.slice(0, 12).map((a, idx) => this.renderAnimeCard(a, { rank: idx + 1 })).join('')}
               </div>
             </section>
 
@@ -198,7 +444,7 @@
                 <a href="#search?sort=score" class="section-more-link">See All &rarr;</a>
               </div>
               <div class="anime-cards-grid">
-                ${topRated.slice(0, 10).map(a => this.renderAnimeCard(a)).join('')}
+                ${topRated.slice(0, 12).map(a => this.renderAnimeCard(a)).join('')}
               </div>
             </section>
 
@@ -212,7 +458,7 @@
                 <a href="#search?sort=popularity" class="section-more-link">See All &rarr;</a>
               </div>
               <div class="anime-cards-grid">
-                ${popular.slice(0, 10).map(a => this.renderAnimeCard(a)).join('')}
+                ${popular.slice(0, 12).map(a => this.renderAnimeCard(a)).join('')}
               </div>
             </section>
           </div>
@@ -238,6 +484,7 @@
         const banner = anime.bannerImage || anime.coverImage;
         const synopsis = anime.synopsis || '';
         const shortSynopsis = synopsis.length > 180 ? synopsis.slice(0, 180) + '...' : synopsis;
+        const isFav = window.ZenithStorage.isFavorite(anime.id);
 
         return `
           <div class="hero-slide ${idx === 0 ? 'active' : ''}" data-slide="${idx}">
@@ -267,8 +514,8 @@
                   </svg>
                   <span>Details</span>
                 </a>
-                <button type="button" class="btn btn-ghost btn-lg btn-hero-fav" data-fav-id="${anime.id}" title="Add to Library">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="${window.ZenithStorage.isFavorite(anime.id) ? '#ef4444' : 'none'}" stroke="currentColor" stroke-width="2">
+                <button type="button" class="btn btn-ghost btn-lg btn-hero-fav ${isFav ? 'active' : ''}" data-fav-id="${anime.id}" title="Toggle Favorite" aria-label="Toggle Favorite">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="${isFav ? '#ef4444' : 'none'}" stroke="${isFav ? '#ef4444' : 'currentColor'}" stroke-width="2">
                     <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
                   </svg>
                 </button>
@@ -300,10 +547,10 @@
             <div class="continue-progress-fill" style="width: ${percent}%"></div>
           </div>
           <div class="continue-card-meta">
-            <h4 class="continue-card-title">${p.animeTitle}</h4>
+            <h4 class="continue-card-title"><a href="#details/${p.animeId}" class="continue-title-link">${p.animeTitle}</a></h4>
             <div class="continue-card-sub">
               <span>${p.episodeTitle || `Episode ${p.episodeNumber}`}</span>
-              <span class="continue-remaining">${remainingMinutes}m left</span>
+              <span class="continue-remaining">${p.completed ? 'Completed ✓' : `${remainingMinutes}m left`}</span>
             </div>
           </div>
         </div>
@@ -312,20 +559,25 @@
 
     bindHomeEvents(container) {
       // Anime card click
-      container.querySelectorAll('.anime-card').forEach(card => {
-        card.addEventListener('click', (e) => {
-          if (e.target.closest('.btn-card-play')) return;
-          const id = card.getAttribute('data-id');
-          if (id) window.location.hash = `#details/${id}`;
-        });
-      });
+      this.bindCardEvents(container);
 
-      // Quick play on card
-      container.querySelectorAll('.btn-card-play').forEach(btn => {
+      // Hero Favorite button click
+      container.querySelectorAll('.btn-hero-fav').forEach(btn => {
         btn.addEventListener('click', (e) => {
+          e.preventDefault();
           e.stopPropagation();
-          const id = btn.getAttribute('data-play-id');
-          if (id) window.location.hash = `#watch/${id}/1`;
+          const favId = btn.getAttribute('data-fav-id');
+          const anime = this.heroAnimeList.find(a => String(a.id) === String(favId));
+          if (!anime) return;
+
+          const isFav = window.ZenithStorage.toggleFavorite(anime);
+          btn.classList.toggle('active', isFav);
+          const svg = btn.querySelector('svg');
+          if (svg) {
+            svg.setAttribute('fill', isFav ? '#ef4444' : 'none');
+            svg.setAttribute('stroke', isFav ? '#ef4444' : 'currentColor');
+          }
+          this.showToast(isFav ? `Added ${anime.title} to Favorites` : `Removed from Favorites`);
         });
       });
 
@@ -353,7 +605,11 @@
           const ep = btn.getAttribute('data-remove-ep');
           window.ZenithStorage.deleteProgress(animeId, ep);
           this.showToast('Removed from Continue Watching');
-          btn.closest('.continue-card')?.remove();
+          const card = btn.closest('.continue-card');
+          card?.remove();
+          if (container.querySelectorAll('.continue-card').length === 0) {
+            container.querySelector('.continue-watching-section')?.remove();
+          }
         });
       });
 
@@ -368,8 +624,10 @@
     },
 
     startHeroAutoRotation() {
+      clearInterval(this.heroInterval);
       if (this.heroAnimeList.length <= 1) return;
       this.heroInterval = setInterval(() => {
+        if (document.hidden) return;
         const next = (this.heroIndex + 1) % this.heroAnimeList.length;
         this.switchHeroSlide(next);
       }, 6500);
@@ -400,7 +658,7 @@
                 <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
               </svg>
               <input type="text" id="main-search-input" class="main-search-input" placeholder="Search anime by English, Japanese, or synonyms..." value="${q}">
-              <button type="button" class="search-clear-btn" id="search-clear-btn" style="display:${q ? 'block' : 'none'}">&times;</button>
+              <button type="button" class="search-clear-btn" id="search-clear-btn" style="display:${q ? 'block' : 'none'}" aria-label="Clear search">&times;</button>
             </div>
             <!-- Random Anime Roulette Button -->
             <button type="button" class="btn btn-secondary btn-roulette" id="btn-roulette" title="Pick Random Anime">
@@ -414,7 +672,7 @@
 
           <!-- Filter Pills Row -->
           <div class="search-filters-row">
-            <select class="filter-select" id="filter-format">
+            <select class="filter-select" id="filter-format" aria-label="Filter by Format">
               <option value="All">All Formats</option>
               <option value="TV">TV Series</option>
               <option value="MOVIE">Movie</option>
@@ -423,21 +681,21 @@
               <option value="SPECIAL">Special</option>
             </select>
 
-            <select class="filter-select" id="filter-status">
+            <select class="filter-select" id="filter-status" aria-label="Filter by Status">
               <option value="All">All Statuses</option>
               <option value="RELEASING">Currently Airing</option>
               <option value="FINISHED">Finished Airing</option>
               <option value="NOT_YET_RELEASED">Not Yet Aired</option>
             </select>
 
-            <select class="filter-select" id="filter-genre">
+            <select class="filter-select" id="filter-genre" aria-label="Filter by Genre">
               <option value="All">All Genres</option>
               ${['Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Horror', 'Mecha', 'Mystery', 'Romance', 'Sci-Fi', 'Slice of Life', 'Sports', 'Supernatural'].map(g => `
                 <option value="${g}" ${g === genre ? 'selected' : ''}>${g}</option>
               `).join('')}
             </select>
 
-            <select class="filter-select" id="filter-sort">
+            <select class="filter-select" id="filter-sort" aria-label="Sort Results">
               <option value="popularity" ${sort === 'popularity' ? 'selected' : ''}>Popularity</option>
               <option value="score" ${sort === 'score' ? 'selected' : ''}>Top Score</option>
               <option value="trending" ${sort === 'trending' ? 'selected' : ''}>Trending</option>
@@ -535,8 +793,7 @@
       // Initial execution
       performSearch();
 
-      // Gently focus input only if navigated directly to empty search screen and nothing is active
-      if (!q && document.activeElement === document.body) {
+      if (!q && document.activeElement === document.body && window.innerWidth > 768) {
         setTimeout(() => input?.focus(), 100);
       }
     },
@@ -547,6 +804,13 @@
           if (e.target.closest('.btn-card-play')) return;
           const id = card.getAttribute('data-id');
           if (id) window.location.hash = `#details/${id}`;
+        });
+        card.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            const id = card.getAttribute('data-id');
+            if (id) window.location.hash = `#details/${id}`;
+          }
         });
       });
 
@@ -580,6 +844,9 @@
         const latestProgress = window.ZenithStorage.getLatestProgressForAnime(anime.id);
         const resumeEp = latestProgress ? latestProgress.episodeNumber : 1;
         const totalEp = anime.totalEpisodes || 24;
+        const maxCount = totalEp > 0 ? Math.min(totalEp, 500) : 24;
+        const chunkSize = 50;
+        const initialEndEp = maxCount > chunkSize ? chunkSize : maxCount;
 
         container.innerHTML = `
           <div class="details-page-wrap">
@@ -644,15 +911,24 @@
                     </div>
                   </div>
 
+                  <!-- Open in Zenith Android App Button -->
+                  <button type="button" class="btn btn-secondary btn-lg btn-open-app" id="btn-open-in-app" title="Open in Zenith Anime Android App">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+                      <line x1="12" y1="18" x2="12.01" y2="18"></line>
+                    </svg>
+                    <span>Open in App</span>
+                  </button>
+
                   <!-- Favorite Toggle -->
-                  <button type="button" class="btn btn-secondary btn-icon btn-lg" id="btn-toggle-fav" title="Add to Favorites">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="${isFav ? '#ef4444' : 'none'}" stroke="currentColor" stroke-width="2">
+                  <button type="button" class="btn btn-secondary btn-icon btn-lg" id="btn-toggle-fav" title="Add to Favorites" aria-label="Add to Favorites">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="${isFav ? '#ef4444' : 'none'}" stroke="${isFav ? '#ef4444' : 'currentColor'}" stroke-width="2">
                       <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path>
                     </svg>
                   </button>
 
                   <!-- Share Link -->
-                  <button type="button" class="btn btn-secondary btn-icon btn-lg" id="btn-share" title="Share Link">
+                  <button type="button" class="btn btn-secondary btn-icon btn-lg" id="btn-share" title="Share Anime Link" aria-label="Share Anime Link">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <circle cx="18" cy="5" r="3"></circle>
                       <circle cx="6" cy="12" r="3"></circle>
@@ -683,15 +959,15 @@
               <div class="tab-panel active" id="tab-panel-episodes">
                 <div class="episodes-toolbar">
                   <div class="episodes-range-selector" id="episodes-range-selector">
-                    <!-- Range buttons like 1-25, 26-50 generated dynamically -->
+                    ${this.renderEpisodeRangePills(maxCount, chunkSize)}
                   </div>
                   <div class="episodes-view-mode">
-                    <button type="button" class="view-mode-btn active" id="btn-mode-grid" title="Compact Grid">
+                    <button type="button" class="view-mode-btn active" id="btn-mode-grid" title="Compact Grid" aria-label="Compact Grid View">
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M4 11h5V5H4v6zm0 7h5v-6H4v6zm6 0h5v-6h-5v6zm6 0h5v-6h-5v6zm-6-7h5V5h-5v6zm6-6v6h5V5h-5z"/>
                       </svg>
                     </button>
-                    <button type="button" class="view-mode-btn" id="btn-mode-list" title="Detailed List">
+                    <button type="button" class="view-mode-btn" id="btn-mode-list" title="Detailed List" aria-label="Detailed List View">
                       <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M4 14h4v-4H4v4zm0 5h4v-4H4v4zM4 9h4V5H4v4zm5 5h12v-4H9v4zm0 5h12v-4H9v4zM9 5v4h12V5H9z"/>
                       </svg>
@@ -700,7 +976,7 @@
                 </div>
 
                 <div class="episodes-container mode-grid" id="episodes-container">
-                  ${this.renderEpisodesGrid(anime, totalEp)}
+                  ${this.renderEpisodesGrid(anime, totalEp, 1, initialEndEp)}
                 </div>
               </div>
 
@@ -732,7 +1008,7 @@
                   ${anime.characters?.length > 0 ? anime.characters.map(c => `
                     <div class="character-card">
                       <div class="character-side">
-                        <img src="${c.characterImage}" alt="${c.characterName}" class="char-thumb">
+                        <img src="${c.characterImage}" alt="${c.characterName}" class="char-thumb" loading="lazy">
                         <div class="char-names">
                           <strong>${c.characterName}</strong>
                           <small>${c.role}</small>
@@ -744,7 +1020,7 @@
                             <strong>${c.vaName}</strong>
                             <small>${c.vaLanguage}</small>
                           </div>
-                          <img src="${c.vaImage}" alt="${c.vaName}" class="va-thumb">
+                          <img src="${c.vaImage}" alt="${c.vaName}" class="va-thumb" loading="lazy">
                         </div>
                       ` : ''}
                     </div>
@@ -752,12 +1028,12 @@
                 </div>
               </div>
 
-              <!-- 4. REVIEWS PANEL (MAL JIKAN) -->
+              <!-- 4. REVIEWS PANEL (ANILIST + MAL JIKAN) -->
               <div class="tab-panel" id="tab-panel-reviews">
                 <div class="reviews-container" id="reviews-container">
                   <div class="spinner-box">
                     <div class="spinner"></div>
-                    <span>Loading authentic MyAnimeList reviews...</span>
+                    <span>Loading community reviews from AniList &amp; MyAnimeList...</span>
                   </div>
                 </div>
               </div>
@@ -768,7 +1044,7 @@
                   ${anime.relations?.length > 0 ? anime.relations.map(r => `
                     <div class="anime-card" onclick="window.location.hash='#details/${r.id}'">
                       <div class="card-poster-wrapper">
-                        <img class="card-poster" src="${r.coverImage}" alt="${r.title}">
+                        <img class="card-poster" src="${r.coverImage}" alt="${r.title}" loading="lazy">
                         <div class="card-badges-top">
                           <span class="badge-score">${r.relationType}</span>
                         </div>
@@ -797,7 +1073,7 @@
           </div>
         `;
 
-        this.bindDetailsEvents(container, anime);
+        this.bindDetailsEvents(container, anime, maxCount, chunkSize);
       } catch (err) {
         container.innerHTML = `
           <div class="container error-state">
@@ -820,27 +1096,52 @@
       }
     },
 
-    renderEpisodesGrid(anime, total) {
+    renderEpisodeRangePills(maxCount, chunkSize = 50) {
+      if (maxCount <= 25) return `<span class="episodes-total-label">Showing all ${maxCount} episodes</span>`;
+      const ranges = [];
+      for (let start = 1; start <= maxCount; start += chunkSize) {
+        const end = Math.min(maxCount, start + chunkSize - 1);
+        ranges.push({ start, end });
+      }
+      return ranges.map((r, idx) => `
+        <button type="button" class="ep-range-pill ${idx === 0 ? 'active' : ''}" data-start="${r.start}" data-end="${r.end}">
+          Ep ${r.start}–${r.end}
+        </button>
+      `).join('');
+    },
+
+    renderEpisodesGrid(anime, total, startEp = 1, endEp = null) {
       const count = total > 0 ? Math.min(total, 500) : 24;
+      const start = Math.max(1, startEp);
+      const end = endEp ? Math.min(count, endEp) : count;
       const progressMap = window.ZenithStorage?.getAllProgress() || {};
+      const titleLang = window.ZenithStorage?.getSettings().titleLanguage || 'english';
+      const displayTitle = (titleLang === 'romaji' ? anime.romajiTitle : anime.englishTitle) || anime.title;
       let html = '';
 
-      for (let i = 1; i <= count; i++) {
+      for (let i = start; i <= end; i++) {
         const key = `${anime.id}_ep_${i}`;
         const p = progressMap[key];
         const isWatched = p?.completed;
-        const percent = p ? Math.round((p.currentTimeSec / p.durationSec) * 100) : 0;
+        const percent = p ? Math.min(100, Math.round((p.currentTimeSec / (p.durationSec || 1440)) * 100)) : 0;
 
         html += `
           <a href="#watch/${anime.id}/${i}" class="episode-box ${isWatched ? 'watched' : ''}" data-ep="${i}">
             <div class="ep-thumb-preview">
               <img src="${anime.bannerImage || anime.coverImage}" alt="Episode ${i}" loading="lazy">
               <span class="ep-play-icon">▶</span>
-              ${percent > 0 && percent < 100 ? `<div class="ep-bar"><div class="ep-bar-fill" style="width:${percent}%"></div></div>` : ''}
+              <span class="ep-duration-badge">24m</span>
+              ${percent > 0 ? `<div class="ep-bar"><div class="ep-bar-fill" style="width:${isWatched ? 100 : percent}%"></div></div>` : ''}
             </div>
             <div class="ep-box-info">
-              <span class="ep-num">Episode ${i}</span>
-              ${isWatched ? '<span class="ep-check-badge">Watched</span>' : ''}
+              <div class="ep-info-main">
+                <span class="ep-num">Episode ${i}</span>
+                <span class="ep-title-sub">${displayTitle} — Episode ${i}</span>
+                <span class="ep-meta-sub">HD • Sub &amp; Dub${percent > 0 && !isWatched ? ` • ${percent}% watched` : ''}</span>
+              </div>
+              <div class="ep-info-right">
+                ${isWatched ? '<span class="ep-check-badge">Watched ✓</span>' : '<span class="ep-stream-cta">Watch ▶</span>'}
+              </div>
             </div>
           </a>
         `;
@@ -848,7 +1149,7 @@
       return html;
     },
 
-    bindDetailsEvents(container, anime) {
+    bindDetailsEvents(container, anime, maxCount, chunkSize) {
       // Tab switcher
       const tabButtons = container.querySelectorAll('.details-tab-btn');
       const panels = container.querySelectorAll('.tab-panel');
@@ -866,6 +1167,21 @@
           // Lazy load themes
           if (tab === 'themes') {
             this.loadThemes(anime);
+          }
+        });
+      });
+
+      // Episode range selector pagination
+      const rangeSelector = document.getElementById('episodes-range-selector');
+      const epContainer = document.getElementById('episodes-container');
+      rangeSelector?.querySelectorAll('.ep-range-pill').forEach(pill => {
+        pill.addEventListener('click', () => {
+          rangeSelector.querySelectorAll('.ep-range-pill').forEach(p => p.classList.remove('active'));
+          pill.classList.add('active');
+          const start = parseInt(pill.getAttribute('data-start'), 10) || 1;
+          const end = parseInt(pill.getAttribute('data-end'), 10) || (start + (chunkSize || 50) - 1);
+          if (epContainer) {
+            epContainer.innerHTML = this.renderEpisodesGrid(anime, maxCount, start, end);
           }
         });
       });
@@ -888,30 +1204,30 @@
         });
       });
 
+      // Open in Zenith App button
+      document.getElementById('btn-open-in-app')?.addEventListener('click', () => {
+        const latest = window.ZenithStorage.getLatestProgressForAnime(anime.id);
+        window.ZenithApp?.openInAndroidApp(anime.id, latest ? latest.episodeNumber : null);
+      });
+
       // Favorite toggle
       const favBtn = document.getElementById('btn-toggle-fav');
       favBtn?.addEventListener('click', () => {
         const isFav = window.ZenithStorage.toggleFavorite(anime);
-        favBtn.querySelector('svg').setAttribute('fill', isFav ? '#ef4444' : 'none');
+        const svg = favBtn.querySelector('svg');
+        if (svg) {
+          svg.setAttribute('fill', isFav ? '#ef4444' : 'none');
+          svg.setAttribute('stroke', isFav ? '#ef4444' : 'currentColor');
+        }
         this.showToast(isFav ? 'Added to Favorites' : 'Removed from Favorites');
       });
 
-      // Share button
+      // Share button (canonical universal share link)
       document.getElementById('btn-share')?.addEventListener('click', () => {
-        if (navigator.share) {
-          navigator.share({
-            title: anime.title,
-            text: `Stream ${anime.title} on Zenith Anime`,
-            url: window.location.href
-          }).catch(() => {});
-        } else {
-          navigator.clipboard.writeText(window.location.href);
-          this.showToast('Copied page link to clipboard!');
-        }
+        this.shareAnime(anime, null);
       });
 
       // View mode (Grid vs Detailed List)
-      const epContainer = document.getElementById('episodes-container');
       document.getElementById('btn-mode-grid')?.addEventListener('click', (e) => {
         e.currentTarget.classList.add('active');
         document.getElementById('btn-mode-list')?.classList.remove('active');
@@ -936,35 +1252,93 @@
 
     async loadMalReviews(anime) {
       const container = document.getElementById('reviews-container');
-      if (!container || container.getAttribute('data-loaded')) return;
+      if (!container || container.getAttribute('data-loaded') === 'true') return;
 
       try {
         const reviews = await window.ZenithAPI.getMalReviews(anime.malId, anime.id);
         container.setAttribute('data-loaded', 'true');
 
         if (reviews.length === 0) {
-          container.innerHTML = '<p class="empty-text">No user reviews submitted yet.</p>';
+          container.innerHTML = '<p class="empty-text">No user reviews submitted yet for this title.</p>';
           return;
         }
 
-        container.innerHTML = reviews.map(r => `
-          <div class="mal-review-card">
-            <div class="review-header">
-              <div class="reviewer-profile">
-                <img src="${r.avatarUrl || 'data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'40\' height=\'40\' fill=\'%231a2232\'><rect width=\'40\' height=\'40\'/><circle cx=\'20\' cy=\'15\' r=\'8\' fill=\'%2364748b\'/><path d=\'M6 36c0-6 7-9 14-9s14 3 14 9\' fill=\'%2364748b\'/></svg>'}" alt="${r.author}" class="reviewer-avatar">
-                <div class="reviewer-meta">
-                  <strong>${r.author}</strong>
-                  <small>${r.date} • ${r.episodesWatched > 0 ? `${r.episodesWatched} episodes watched` : 'Completed series'}</small>
+        container.innerHTML = reviews.map((r, idx) => {
+          const isLong = (r.body || '').length > 420 || /\bimg\d*%?\(|\!\[|\[img|<img/i.test(r.body || '');
+          const formattedBody = this.formatReviewBody(r.body);
+          const sourceLabel = r.source === 'MAL' ? 'MyAnimeList' : 'AniList';
+          const sourceClass = r.source === 'MAL' ? 'source-mal' : 'source-anilist';
+          const defaultAvatar = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='40' height='40' fill='%231a2232'><rect width='40' height='40'/><circle cx='20' cy='15' r='8' fill='%2364748b'/><path d='M6 36c0-6 7-9 14-9s14 3 14 9' fill='%2364748b'/></svg>";
+
+          return `
+            <article class="mal-review-card ${r.isSpoiler ? 'card-has-spoiler' : ''}" data-review-idx="${idx}">
+              <div class="review-header">
+                <div class="reviewer-profile">
+                  <img src="${r.avatarUrl || defaultAvatar}" alt="${r.author}" class="reviewer-avatar" loading="lazy" onerror="this.src='${defaultAvatar}'">
+                  <div class="reviewer-meta">
+                    <div class="reviewer-name-row">
+                      <strong>${r.author}</strong>
+                      <span class="review-source-badge ${sourceClass}">${sourceLabel}</span>
+                      ${r.isSpoiler ? '<span class="review-spoiler-badge">Contains Spoilers</span>' : ''}
+                    </div>
+                    <small>${r.date ? `${r.date} • ` : ''}${r.episodesWatched > 0 ? `${r.episodesWatched} episodes watched` : 'Verified Reviewer'}</small>
+                  </div>
                 </div>
+                <div class="review-score-badge">★ ${r.score}/10</div>
               </div>
-              <div class="review-score-badge">★ ${r.score}/10</div>
-            </div>
-            <p class="review-excerpt">${r.body}</p>
-            <div class="review-footer">
-              <span>👍 ${r.helpfulCount} people found this helpful</span>
-            </div>
-          </div>
-        `).join('');
+
+              ${r.isSpoiler ? `
+                <div class="review-card-spoiler-gate">
+                  <span>⚠️ This review is flagged as containing plot spoilers.</span>
+                  <button type="button" class="btn btn-secondary btn-sm btn-reveal-card-spoiler">Reveal Review</button>
+                </div>
+              ` : ''}
+
+              <div class="review-body-wrapper ${r.isSpoiler ? 'spoiler-hidden' : ''}">
+                <div class="review-body-container ${isLong ? 'collapsed' : ''}">
+                  <div class="review-rich-content">${formattedBody}</div>
+                </div>
+                ${isLong ? `
+                  <button type="button" class="btn-review-expand" data-expanded="false">
+                    <span>Read Full Review</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+                      <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                  </button>
+                ` : ''}
+              </div>
+
+              <div class="review-footer">
+                <span>👍 ${r.helpfulCount} people found this review helpful</span>
+              </div>
+            </article>
+          `;
+        }).join('');
+
+        // Bind expand / collapse buttons
+        container.querySelectorAll('.btn-review-expand').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const wrapper = btn.closest('.review-body-wrapper');
+            const bodyContainer = wrapper?.querySelector('.review-body-container');
+            if (!bodyContainer) return;
+
+            const isExpanded = btn.getAttribute('data-expanded') === 'true';
+            bodyContainer.classList.toggle('collapsed', isExpanded);
+            btn.setAttribute('data-expanded', isExpanded ? 'false' : 'true');
+            btn.classList.toggle('expanded', !isExpanded);
+            const span = btn.querySelector('span');
+            if (span) span.textContent = isExpanded ? 'Read Full Review' : 'Show Less';
+          });
+        });
+
+        // Bind full-card spoiler gate reveal buttons
+        container.querySelectorAll('.btn-reveal-card-spoiler').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const card = btn.closest('.mal-review-card');
+            card?.querySelector('.review-card-spoiler-gate')?.remove();
+            card?.querySelector('.review-body-wrapper')?.classList.remove('spoiler-hidden');
+          });
+        });
       } catch (err) {
         container.innerHTML = `<p class="error-text">Failed to load reviews: ${err.message}</p>`;
       }
@@ -1047,8 +1421,10 @@
         const anime = await window.ZenithAPI.getAnimeDetails(animeId);
         if (!anime) throw new Error('Anime not found');
 
+        const epNum = parseInt(episodeNumber, 10) || 1;
+
         // Mount video player
-        window.ZenithPlayer.load(anime, episodeNumber);
+        window.ZenithPlayer.load(anime, epNum);
 
         // Render bottom info strip
         const titleLang = window.ZenithStorage?.getSettings().titleLanguage || 'english';
@@ -1061,12 +1437,29 @@
               <div class="watch-meta-left">
                 <h2>${displayTitle}</h2>
                 <div class="watch-badges-row">
-                  <span class="badge-pill badge-primary">Episode ${episodeNumber}</span>
+                  <span class="badge-pill badge-primary">Episode ${epNum}</span>
                   <span class="badge-pill">${anime.type || 'TV'}</span>
                   ${anime.rating > 0 ? `<span class="badge-pill badge-score">★ ${anime.ratingDisplay}</span>` : ''}
                 </div>
               </div>
               <div class="watch-meta-right">
+                <button type="button" class="btn btn-secondary btn-sm" id="watch-btn-open-app" title="Open Episode in Zenith Android App">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="5" y="2" width="14" height="20" rx="2" ry="2"></rect>
+                    <line x1="12" y1="18" x2="12.01" y2="18"></line>
+                  </svg>
+                  <span>Open in App</span>
+                </button>
+                <button type="button" class="btn btn-secondary btn-sm" id="watch-btn-share" title="Share Episode Link">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="18" cy="5" r="3"></circle>
+                    <circle cx="6" cy="12" r="3"></circle>
+                    <circle cx="18" cy="19" r="3"></circle>
+                    <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                    <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                  </svg>
+                  <span>Share</span>
+                </button>
                 <a href="#details/${anime.id}" class="btn btn-secondary btn-sm">Anime Details</a>
               </div>
             </div>
@@ -1074,11 +1467,29 @@
             <!-- Quick Episode Picker Strip -->
             <div class="watch-episodes-strip">
               <h3>Episodes Guide (${anime.totalEpisodes > 0 ? anime.totalEpisodes : 'All'})</h3>
-              <div class="episodes-horizontal-scroll">
-                ${this.renderWatchEpisodesScroll(anime, parseInt(episodeNumber, 10))}
+              <div class="episodes-horizontal-scroll" id="watch-episodes-scroll">
+                ${this.renderWatchEpisodesScroll(anime, epNum)}
               </div>
             </div>
           `;
+
+          document.getElementById('watch-btn-share')?.addEventListener('click', () => {
+            this.shareAnime(anime, epNum);
+          });
+
+          document.getElementById('watch-btn-open-app')?.addEventListener('click', () => {
+            window.ZenithApp?.openInAndroidApp(anime.id, epNum);
+          });
+
+          // Auto-scroll active episode pill into horizontal center view
+          const scrollStrip = document.getElementById('watch-episodes-scroll');
+          const activePill = scrollStrip?.querySelector('.watch-ep-pill.active');
+          if (scrollStrip && activePill) {
+            requestAnimationFrame(() => {
+              const targetLeft = activePill.offsetLeft - (scrollStrip.clientWidth / 2) + (activePill.clientWidth / 2);
+              scrollStrip.scrollTo({ left: Math.max(0, targetLeft), behavior: 'smooth' });
+            });
+          }
         }
       } catch (err) {
         container.innerHTML = `<div class="container error-state"><p>Player error: ${err.message}</p></div>`;
@@ -1179,7 +1590,7 @@
 
             return `
               <div class="schedule-card" onclick="window.location.hash='#details/${anime.id}'">
-                <img src="${anime.coverImage}" alt="${anime.title}" class="schedule-thumb">
+                <img src="${anime.coverImage}" alt="${anime.title}" class="schedule-thumb" loading="lazy">
                 <div class="schedule-info">
                   <span class="schedule-countdown-badge ${timeUntil <= 0 ? 'aired' : ''}">${countdownStr}</span>
                   <h4 class="schedule-anime-title">${anime.title}</h4>
@@ -1220,7 +1631,7 @@
               <h1 class="section-heading">My Anime Library</h1>
             </div>
             <div class="mylist-actions-right">
-              <select class="filter-select" id="mylist-sort-select">
+              <select class="filter-select" id="mylist-sort-select" aria-label="Sort Library">
                 <option value="updated">Recently Updated</option>
                 <option value="title">Title A-Z</option>
                 <option value="score">Highest Score</option>

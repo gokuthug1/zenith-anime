@@ -1,6 +1,7 @@
 package com.example.ui.details
 
 import android.widget.Toast
+import com.example.data.util.ShareUtils
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -292,7 +293,12 @@ fun AnimeDetailsScreen(
                 }
             },
             onShare = {
-                Toast.makeText(context, "Sharing is coming soon!", Toast.LENGTH_SHORT).show()
+                ShareUtils.shareAnime(
+                    context = context,
+                    anime = currentAnime,
+                    titleLanguagePreference = detailsSettings.titleLanguagePreference,
+                    episodeNumber = ep.number
+                )
             }
         )
     }
@@ -327,13 +333,11 @@ fun AnimeDetailsScreen(
                 }
             },
             onShare = {
-                val shareTitle = item.displayTitle(detailsSettings.titleLanguagePreference)
-                val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(android.content.Intent.EXTRA_SUBJECT, shareTitle)
-                    putExtra(android.content.Intent.EXTRA_TEXT, "Watch $shareTitle on Zenith Anime!\nhttps://anilist.co/anime/${item.id.removePrefix("mal_")}")
-                }
-                context.startActivity(android.content.Intent.createChooser(sendIntent, "Share $shareTitle"))
+                ShareUtils.shareAnime(
+                    context = context,
+                    anime = item,
+                    titleLanguagePreference = detailsSettings.titleLanguagePreference
+                )
             }
         )
     }
@@ -403,25 +407,11 @@ fun AnimeDetailsScreen(
                             .background(Color(0x88000000))
                             .border(0.5.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(20.dp))
                             .clickable {
-                                val shareTitle = currentAnime.displayTitle(detailsSettings.titleLanguagePreference)
-                                val shareText = buildString {
-                                    append("Watch $shareTitle on Zenith Anime!\n")
-                                    if (currentAnime.rating > 0) append("⭐ Rating: ${currentAnime.rating}/10\n")
-                                    if (currentAnime.synopsis.isNotBlank()) {
-                                        append("\n${currentAnime.synopsis.take(200).trim()}...\n\n")
-                                    }
-                                    if (currentAnime.malId.isNotBlank() && currentAnime.malId != "0") {
-                                        append("https://myanimelist.net/anime/${currentAnime.malId}")
-                                    } else {
-                                        append("https://anilist.co/anime/${currentAnime.id.removePrefix("mal_")}")
-                                    }
-                                }
-                                val sendIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(android.content.Intent.EXTRA_SUBJECT, shareTitle)
-                                    putExtra(android.content.Intent.EXTRA_TEXT, shareText)
-                                }
-                                context.startActivity(android.content.Intent.createChooser(sendIntent, "Share $shareTitle"))
+                                ShareUtils.shareAnime(
+                                    context = context,
+                                    anime = currentAnime,
+                                    titleLanguagePreference = detailsSettings.titleLanguagePreference
+                                )
                             }
                             .padding(horizontal = 12.dp, vertical = 6.dp)
                             .testTag("details_share_button")
@@ -1442,6 +1432,8 @@ private fun MalReviewsSection(
     onToggleExpanded: () -> Unit,
     themeAccent: Color
 ) {
+    var showAllReviews by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1467,7 +1459,7 @@ private fun MalReviewsSection(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "MyAnimeList Reviews",
+                text = "MAL & Community Reviews",
                 color = TextPrimary,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
@@ -1516,7 +1508,7 @@ private fun MalReviewsSection(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Fetching MyAnimeList user reviews…",
+                            text = "Fetching MyAnimeList & AniList user reviews…",
                             color = TextSecondary,
                             fontSize = 12.sp
                         )
@@ -1533,7 +1525,7 @@ private fun MalReviewsSection(
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = "No MyAnimeList user reviews available for this anime yet.",
+                            text = "No user reviews available for this anime yet.",
                             color = TextSecondary,
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center
@@ -1541,9 +1533,24 @@ private fun MalReviewsSection(
                     }
                 }
                 else -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        reviews.take(6).forEach { review ->
+                    val displayedReviews = if (showAllReviews) reviews else reviews.take(8)
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        displayedReviews.forEach { review ->
                             MalReviewCard(review = review, themeAccent = themeAccent)
+                        }
+                        if (reviews.size > 8) {
+                            OutlinedButton(
+                                onClick = { showAllReviews = !showAllReviews },
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text(
+                                    text = if (showAllReviews) "Show Fewer Reviews" else "Show All ${reviews.size} Reviews",
+                                    color = themeAccent,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }
@@ -1559,6 +1566,8 @@ private fun MalReviewCard(
 ) {
     var isExpanded by remember { mutableStateOf(false) }
     var revealSpoilers by remember { mutableStateOf(!review.isSpoiler) }
+    val isAniListSource = review.source.contains("AniList", ignoreCase = true) || review.id.startsWith("ani_")
+    val imageCount = remember(review.body) { ReviewRichParser.extractAllImageUrls(review.body).size }
 
     Column(
         modifier = Modifier
@@ -1577,7 +1586,7 @@ private fun MalReviewCard(
         ) {
             Box(
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
@@ -1615,15 +1624,34 @@ private fun MalReviewCard(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
-                            .background(Color(0xFF2E51A2).copy(alpha = 0.25f))
+                            .background(
+                                if (isAniListSource) Color(0xFF02A9FF).copy(alpha = 0.2f)
+                                else Color(0xFF2E51A2).copy(alpha = 0.25f)
+                            )
                             .padding(horizontal = 5.dp, vertical = 1.dp)
                     ) {
                         Text(
-                            text = "MAL",
-                            color = Color(0xFF7CA5FF),
+                            text = if (isAniListSource) "AniList" else "MAL",
+                            color = if (isAniListSource) Color(0xFF38BDF8) else Color(0xFF7CA5FF),
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Black
                         )
+                    }
+                    if (imageCount > 0) {
+                        Spacer(modifier = Modifier.width(5.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(themeAccent.copy(alpha = 0.16f))
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = "$imageCount img",
+                                color = themeAccent,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
                 }
                 val metaParts = buildList {
@@ -1683,19 +1711,30 @@ private fun MalReviewCard(
                 )
             }
         } else {
-            Text(
-                text = review.body,
-                color = TextPrimary.copy(alpha = 0.9f),
-                fontSize = 12.sp,
-                lineHeight = 18.sp,
-                maxLines = if (isExpanded) Int.MAX_VALUE else 4,
-                overflow = TextOverflow.Ellipsis
+            if (isExpanded && review.summary.isNotBlank() && !review.body.trimStart().startsWith(review.summary.take(30))) {
+                Text(
+                    text = review.summary,
+                    color = themeAccent,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 18.sp,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+
+            ReviewRichContent(
+                rawBody = review.body,
+                isExpanded = isExpanded,
+                themeAccent = themeAccent
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded }
+                    .padding(top = 2.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (review.helpfulCount > 0) {

@@ -2,9 +2,10 @@
 <html lang="en" data-accent="emerald">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="description" content="Zenith Anime — Free anime streaming app for Android and the web with watch tracking and multi-server playback.">
-  <title>Zenith Anime — Free Anime Streaming for Android & Web</title>
+  <meta name="theme-color" content="#0b0e14">
+  <title>Zenith Anime — Free Anime Streaming for Android &amp; Web</title>
   <link rel="stylesheet" href="styles.css">
   <link rel="icon" type="image/svg+xml" href="assets/ic_zenith_logo.svg">
 </head>
@@ -94,7 +95,7 @@
           </div>
           <div class="notice-content">
             <h4>Available for Android and Web</h4>
-            <p>Zenith Anime provides a native Android app with Jetpack Compose & ExoPlayer, alongside a web streaming client for instant browser access across PC, Laptop, Tablet, and Mobile.</p>
+            <p>Zenith Anime provides a native Android app with Jetpack Compose &amp; ExoPlayer, alongside a web streaming client for instant browser access across PC, Laptop, Tablet, and Mobile.</p>
           </div>
         </aside>
 
@@ -104,7 +105,7 @@
               <span class="badge-dot" aria-hidden="true"></span>
               <span>Android &bull; Web &bull; Local-First</span>
             </div>
-            <h1 class="hero-title">Free Anime Streaming for Android & Web.</h1>
+            <h1 class="hero-title">Free Anime Streaming for Android &amp; Web.</h1>
             <p class="hero-subtitle">Zenith Anime is a free, local-first anime streaming app and web player. Continuous watch progress tracking, multi-server streaming, subtitle and dub audio switching, and zero telemetry.</p>
 
             <div class="hero-actions">
@@ -158,7 +159,7 @@
 
           <!-- Hero Mockup Container -->
           <div class="mockup-container" aria-label="Player UI Preview Mockup">
-            <div class="mockup-screen">
+            <div class="mockup-screen" id="hero-mockup-screen">
               <div class="mockup-top-bar">
                 <span>Zenith Video Player</span>
                 <div class="mockup-controls-group">
@@ -176,21 +177,27 @@
 
               <!-- Center Transport -->
               <div class="mockup-center">
-                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="#ffffff" aria-hidden="true"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
-                <div class="mockup-play-btn" aria-hidden="true">
+                <button type="button" class="mockup-icon-btn" id="hero-seek-back" aria-label="Rewind 10 seconds">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="#ffffff" aria-hidden="true"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
+                </button>
+                <button type="button" class="mockup-play-btn" id="hero-play-btn" aria-label="Toggle playback">
                   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-                </div>
-                <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="#ffffff" aria-hidden="true"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg>
+                </button>
+                <button type="button" class="mockup-icon-btn" id="hero-seek-fwd" aria-label="Forward 10 seconds">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="#ffffff" aria-hidden="true"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg>
+                </button>
               </div>
 
               <!-- Timeline & Status -->
               <div class="mockup-bottom-bar">
-                <div class="mockup-seekbar">
-                  <div class="mockup-progress"></div>
+                <div class="mockup-seekbar" id="hero-seekbar" role="slider" aria-label="Hero Preview Seekbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="43">
+                  <div class="mockup-progress" id="hero-seekbar-progress" style="width: 43.3%;">
+                    <span class="mockup-seek-thumb"></span>
+                  </div>
                 </div>
                 <div class="mockup-time-row">
-                  <span>10:24</span>
-                  <span>24:00</span>
+                  <span id="hero-time-current">10:24</span>
+                  <span id="hero-time-total">24:00</span>
                 </div>
               </div>
             </div>
@@ -245,8 +252,8 @@
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
               </svg>
             </div>
-            <h3 class="feature-title">MyAnimeList Reviews</h3>
-            <p class="feature-body">Cleanly integrated user reviews and score breakdowns directly on anime details pages, linked accurately to the corresponding MAL series data.</p>
+            <h3 class="feature-title">AniList &amp; MyAnimeList Reviews</h3>
+            <p class="feature-body">Richly formatted community reviews with inline illustrations, interactive spoiler tags, and score breakdowns directly on anime details pages.</p>
           </article>
 
           <article class="feature-card">
@@ -285,7 +292,7 @@
           <!-- Playground Editor Controls -->
           <div class="playground-editor">
             <h3>Player Customization Controls</h3>
-            <p>Modify settings below to see the simulator respond instantly:</p>
+            <p>Modify settings below or scrub the timeline to see the simulator respond instantly:</p>
 
             <div class="control-group">
               <label class="control-label">Transport Button Position</label>
@@ -362,7 +369,7 @@
           <div class="simulator-view">
             <div class="simulator-header">
               <span>LIVE INTERACTIVE SIMULATOR</span>
-              <span class="brand-tag">Real-Time Sync</span>
+              <span class="brand-tag">Interactive Scrubbing</span>
             </div>
 
             <div class="simulator-box" id="sim-screen">
@@ -370,13 +377,13 @@
               <div class="mockup-top-bar">
                 <span>Demon Slayer: Ep 1</span>
                 <div class="mockup-controls-group">
-                  <span class="sim-top-icon" data-id="audio">
+                  <span class="sim-top-icon" data-id="audio" title="Audio Track">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
                   </span>
-                  <span class="sim-top-icon" data-id="subtitles">
+                  <span class="sim-top-icon" data-id="subtitles" title="Subtitles">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-9 7H9.5v-.5h-2v3h2v-.5H11v1c0 .55-.45 1-1 1H7c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1zm7 0h-1.5v-.5h-2v3h2v-.5H18v1c0 .55-.45 1-1 1h-3c-.55 0-1-.45-1-1v-4c0-.55.45-1 1-1h3c.55 0 1 .45 1 1v1z"/></svg>
                   </span>
-                  <span class="sim-top-icon" data-id="speed">
+                  <span class="sim-top-icon" data-id="speed" title="Playback Speed">
                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20.38 8.57l-1.23 1.85a8 8 0 0 1-.22 7.58H5.07A8 8 0 0 1 15.58 6.85l1.85-1.23A10 10 0 0 0 3.35 19a2 2 0 0 0 1.72 1h13.85a2 2 0 0 0 1.74-1 10 10 0 0 0-.27-10.44z"/><path d="M10.59 15.41a2 2 0 0 0 2.83 0l5.66-8.49-8.49 5.66a2 2 0 0 0 0 2.83z"/></svg>
                   </span>
                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
@@ -390,26 +397,41 @@
 
               <!-- Center Transport Controls -->
               <div class="mockup-center" id="sim-transport-center">
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="#ffffff"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
-                <div class="mockup-play-btn">
+                <button type="button" class="mockup-icon-btn sim-seek-btn" id="sim-center-rewind" data-seek="-10" title="Rewind 10s" aria-label="Rewind 10 seconds">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="#ffffff"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
+                </button>
+                <button type="button" class="mockup-play-btn sim-play-trigger" id="sim-center-play" aria-label="Play or Pause">
                   <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-                </div>
-                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="#ffffff"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg>
+                </button>
+                <button type="button" class="mockup-icon-btn sim-seek-btn" id="sim-center-ff" data-seek="10" title="Forward 10s" aria-label="Forward 10 seconds">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="#ffffff"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg>
+                </button>
               </div>
 
               <!-- Bottom Timeline Bar -->
               <div class="mockup-bottom-bar">
-                <div class="mockup-center" id="sim-transport-bottom" style="display:none;margin-bottom:6px;">
-                  <div class="mockup-play-btn" style="width:32px;height:32px;">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                <div class="mockup-bottom-transport" id="sim-transport-bottom" style="display:none;">
+                  <div class="sim-bottom-left-controls">
+                    <button type="button" class="mockup-icon-btn sim-seek-btn" data-seek="-10" title="Rewind 10s">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="#ffffff"><path d="M11 18V6l-8.5 6 8.5 6zm.5-6l8.5 6V6l-8.5 6z"/></svg>
+                    </button>
+                    <button type="button" class="mockup-play-btn sim-play-trigger" id="sim-bottom-play" style="width:30px;height:30px;" aria-label="Play or Pause">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                    </button>
+                    <button type="button" class="mockup-icon-btn sim-seek-btn" data-seek="10" title="Forward 10s">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="#ffffff"><path d="M4 18l8.5-6L4 6v12zm9-12v12l8.5-6L13 6z"/></svg>
+                    </button>
+                  </div>
+                  <button type="button" class="sim-skip-intro-pill sim-seek-btn" data-seek="85" title="Skip Opening (+85s)">+85s Intro</button>
+                </div>
+                <div class="mockup-seekbar" id="sim-seekbar" role="slider" aria-label="Simulator Seekbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="18">
+                  <div class="mockup-progress" id="sim-seekbar-progress" style="width: 17.7%;">
+                    <span class="mockup-seek-thumb"></span>
                   </div>
                 </div>
-                <div class="mockup-seekbar" id="sim-seekbar">
-                  <div class="mockup-progress"></div>
-                </div>
                 <div class="mockup-time-row">
-                  <span>04:12</span>
-                  <span>23:45</span>
+                  <span id="sim-time-current">04:12</span>
+                  <span id="sim-time-total">23:45</span>
                 </div>
               </div>
             </div>
@@ -597,12 +619,13 @@
             </div>
             <span class="brand-name">Zenith Anime</span>
           </div>
-          <p>A native, local-first anime client engineered for privacy, speed, and customization on Android.</p>
+          <p>A native, local-first anime client engineered for privacy, speed, and customization on Android &amp; Web.</p>
         </div>
 
         <div class="footer-col">
           <h5>Navigation</h5>
           <ul class="footer-links">
+            <li><a href="index.html" class="footer-link">Web Stream App</a></li>
             <li><a href="#features" class="footer-link">Features</a></li>
             <li><a href="#playground" class="footer-link">UI Playground</a></li>
             <li><a href="#downloads" class="footer-link">Download APK</a></li>
@@ -632,7 +655,7 @@
 
       <div class="footer-bottom">
         <span>&copy; 2026 Zenith Anime Contributors. Released under the MIT License.</span>
-        <span>Vibecoded by Gemini 3.8 Flash in 1 month.</span>
+        <span>Built for Android &amp; Web</span>
       </div>
     </div>
   </footer>

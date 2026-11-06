@@ -699,15 +699,6 @@ fun SearchScreen(
                     Toast.makeText(context, "Moved to ${status.displayName}", Toast.LENGTH_SHORT).show()
                 }
             },
-            onShare = {
-                val shareText = "Check out ${target.displayTitle(settings.titleLanguagePreference)} (${target.year} • ★ ${target.rating}) on Zenith Anime!"
-                val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_SUBJECT, target.displayTitle(settings.titleLanguagePreference))
-                    putExtra(Intent.EXTRA_TEXT, shareText)
-                }
-                context.startActivity(Intent.createChooser(sendIntent, "Share Anime"))
-            },
             onDownload = {
                 scope.launch {
                     val ep = com.example.data.model.Episode(

@@ -23,6 +23,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
             android:supportsPictureInPicture="true"
             android:resizeableActivity="true"
@@ -32,6 +33,26 @@
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- Custom URI Scheme Deep Links: zenithanime://anime/{id} and zenith://anime/{id} -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="zenithanime" />
+                <data android:scheme="zenith" />
+            </intent-filter>
+
+            <!-- Web App & Community Deep Links -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="gokuthug1.github.io" android:pathPrefix="/zenith-anime" />
+                <data android:scheme="http" android:host="gokuthug1.github.io" android:pathPrefix="/zenith-anime" />
+                <data android:scheme="https" android:host="anilist.co" android:pathPrefix="/anime" />
+                <data android:scheme="https" android:host="myanimelist.net" android:pathPrefix="/anime" />
             </intent-filter>
         </activity>
     </application>

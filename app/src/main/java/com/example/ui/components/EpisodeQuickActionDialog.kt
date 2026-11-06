@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import com.example.data.model.Episode
+import com.example.data.util.ShareUtils
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.LocalThemeAccent
 import com.example.ui.theme.TextPrimary
@@ -151,13 +152,19 @@ fun EpisodeQuickActionDialog(
                     label = "Share Episode",
                     onClick = {
                         onDismiss()
-                        val shareText = "Watching Episode ${episode.number}: ${episode.title} on Zenith Anime!\nhttps://anilist.co/anime/${episode.animeId.removePrefix("mal_")}"
-                        val sendIntent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_SUBJECT, "Episode ${episode.number} — ${episode.title}")
-                            putExtra(Intent.EXTRA_TEXT, shareText)
+                        if (onShare != null) {
+                            onShare()
+                        } else {
+                            val webUrl = ShareUtils.buildShareWebUrl(episode.animeId, episode.number)
+                            val appUrl = ShareUtils.buildAppDeepLink(episode.animeId, episode.number)
+                            val shareText = "Watching Episode ${episode.number}: ${episode.title} on Zenith Anime!\n\nStream on Web or Open in Zenith App:\n$webUrl\n\nDirect App Link:\n$appUrl"
+                            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(Intent.EXTRA_SUBJECT, "Episode ${episode.number} — ${episode.title}")
+                                putExtra(Intent.EXTRA_TEXT, shareText)
+                            }
+                            context.startActivity(Intent.createChooser(sendIntent, "Share Episode ${episode.number}"))
                         }
-                        context.startActivity(Intent.createChooser(sendIntent, "Share Episode ${episode.number}"))
                     }
                 )
             }
