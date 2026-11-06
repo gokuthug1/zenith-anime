@@ -1,7 +1,7 @@
 /**
  * Zenith Anime Web — Network & API Service
  * Integrates AniList GraphQL, Jikan (MAL) Reviews, AnimeThemes.moe,
- * and Multi-Server Streaming Embed Resolvers.
+ * SeasonLabeler, Aired Episode Limiting, and Multi-Server Streaming Embed Resolvers.
  */
 
 (function (window) {
@@ -27,6 +27,191 @@
 
   function setCached(key, data) {
     cache.set(key, { time: Date.now(), data });
+  }
+
+  function isSimilarToRomaji(a, b) {
+    if (!a || !b) return false;
+    const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '').replace(/ou/g, 'o').replace(/oo/g, 'o').replace(/uu/g, 'u');
+    return norm(a) === norm(b);
+  }
+
+  // ---- SEASON LABELER (Ported from Android SeasonLabeler.kt) ----
+  const SeasonLabeler = {
+    FINAL_SEASON: 99,
+    RELATION_LABELS: {
+      ADAPTATION: 'Same series',
+      SEQUEL: 'Next season',
+      PREQUEL: 'Previous season',
+      PARENT: 'Main story',
+      SIDE_STORY: 'Side story',
+      'SIDE STORY': 'Side story',
+      SPIN_OFF: 'Spin-off',
+      'SPIN OFF': 'Spin-off',
+      ALTERNATIVE: 'Alternate version',
+      SUMMARY: 'Recap',
+      CHARACTER: 'Character',
+      SOURCE: 'Source material',
+      COMPILATION: 'Compilation',
+      CONTAINS: 'Contains',
+      OTHER: 'Related'
+    },
+
+    romanToInt(raw) {
+      const token = String(raw || '').trim().toLowerCase();
+      if (!token || !/^[ivxlcdm]+$/.test(token)) return 0;
+      const values = { i: 1, v: 5, x: 10, l: 50, c: 100, d: 500, m: 1000 };
+      let total = 0;
+      let previous = 0;
+      for (let i = token.length - 1; i >= 0; i--) {
+        const val = values[token[i]];
+        if (!val) return 0;
+        total += val < previous ? -val : val;
+        previous = Math.max(previous, val);
+      }
+      return total >= 1 && total <= 20 ? total : 0;
+    },
+
+    friendlyRelationLabel(relationType) {
+      const norm = String(relationType || 'RELATED').trim().toUpperCase().replace(/-/g, '_');
+      const mapped =
+        this.RELATION_LABELS[norm] ||
+        this.RELATION_LABELS[norm.replace(/_/g, ' ')] ||
+        norm.replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+      return /adaptation/i.test(mapped) ? 'Same series' : mapped;
+    },
+
+    seasonNumberFromTitle(title) {
+      const lower = String(title || '').trim().toLowerCase();
+      if (!lower) return 0;
+
+      if (/\bfinal\s+(?:season|part|cour)\b/.test(lower)) return this.FINAL_SEASON;
+
+      let m = lower.match(/\b(\d{1,2})(?:st|nd|rd|th)\s+season\b/);
+      if (m && parseInt(m[1], 10) > 0) return parseInt(m[1], 10);
+
+      m = lower.match(/\bseason\s+(\d{1,2})\b/);
+      if (m && parseInt(m[1], 10) > 0) return parseInt(m[1], 10);
+
+      m = lower.match(/\bseason\s+([ivxlcdm]{1,5})\b/);
+      if (m) {
+        const n = this.romanToInt(m[1]);
+        if (n > 0) return n;
+      }
+
+      m = lower.match(/\bpart\s+([0-9]{1,2}|[ivxlcdm]{1,5})\b/);
+      if (m) {
+        const n = parseInt(m[1], 10) || this.romanToInt(m[1]);
+        if (n > 0) return n;
+      }
+
+      m = lower.match(/\b(\d{1,2})(?:st|nd|rd|th)\s+cour\b/) || lower.match(/\bcour\s+(\d{1,2})\b/);
+      if (m && parseInt(m[1], 10) > 0) return parseInt(m[1], 10);
+
+      const primarySegment = lower.split(':')[0].split(' - ')[0].split(' – ')[0];
+      const tokens = lower.split(/[^a-z0-9]+/).filter(Boolean);
+      const primaryTokens = primarySegment.split(/[^a-z0-9]+/).filter(Boolean);
+      const candidates = [tokens[tokens.length - 1], primaryTokens[primaryTokens.length - 1]].filter(Boolean);
+      for (const tok of candidates) {
+        if (tok.length < 2) continue;
+        const num = this.romanToInt(tok);
+        if (num >= 2 && num <= 12) return num;
+      }
+      return 0;
+    },
+
+    seasonLabel(title, relationType, format, style = 'Season') {
+      const upperFormat = String(format || '').trim().toUpperCase();
+      if (['SPECIAL', 'OVA', 'ONA', 'MUSIC'].includes(upperFormat)) {
+        return upperFormat === 'OVA' ? 'OVA' : upperFormat === 'ONA' ? 'ONA' : 'Specials';
+      }
+      if (upperFormat === 'MOVIE') {
+        return 'Movie';
+      }
+      const usePart = String(style || '').trim().toLowerCase() === 'part';
+      const num = this.seasonNumberFromTitle(title);
+      let label;
+      if (num === this.FINAL_SEASON) {
+        label = usePart ? 'Final Part' : 'Final Season';
+      } else if (num > 0) {
+        label = usePart ? `Part ${num}` : `Season ${num}`;
+      } else {
+        label = this.friendlyRelationLabel(relationType);
+      }
+      return /adaptation/i.test(label) ? 'Same series' : label;
+    }
+  };
+
+  /**
+   * Computes episode availability with exact Android Anime.kt parity:
+   * - Upcoming / Not Yet Released anime ALWAYS have availableEpisodes = 0 (never 12/24 phantom episodes).
+   * - Currently Airing anime cap availableEpisodes to (nextAiringEpisode.episode - 1) so unaired episodes are never listed.
+   */
+  function computeEpisodeAvailability(item) {
+    const rawStatus = String(item.status || 'FINISHED').trim().toUpperCase();
+    const format = String(item.format || item.type || 'TV').trim().toUpperCase();
+    const nextAiring = item.nextAiringEpisode && Number(item.nextAiringEpisode.episode) > 0
+      ? {
+          episode: Number(item.nextAiringEpisode.episode),
+          timeUntilAiring: Number(item.nextAiringEpisode.timeUntilAiring || 0),
+          airingAt: Number(item.nextAiringEpisode.airingAt || 0)
+        }
+      : null;
+
+    const isUpcoming =
+      rawStatus === 'NOT_YET_RELEASED' ||
+      rawStatus === 'UPCOMING' ||
+      rawStatus === 'NOT YET AIRED' ||
+      Boolean(nextAiring && nextAiring.episode === 1 && nextAiring.timeUntilAiring > 0);
+
+    const isAiring =
+      !isUpcoming &&
+      (rawStatus === 'RELEASING' || rawStatus === 'CURRENTLY AIRING' || rawStatus === 'AIRING');
+
+    const rawEpisodes = item.episodes !== null && item.episodes !== undefined && Number(item.episodes) > 0
+      ? Number(item.episodes)
+      : (Number(item.totalEpisodes) > 0 ? Number(item.totalEpisodes) : null);
+
+    const streamingList = Array.isArray(item.streamingEpisodes) ? item.streamingEpisodes : [];
+    const streamingCount = streamingList.length;
+
+    let totalEpisodes = 0;
+    if (rawEpisodes !== null && rawEpisodes > 0) {
+      totalEpisodes = rawEpisodes;
+    } else if (nextAiring && nextAiring.episode > 0) {
+      totalEpisodes = Math.max(0, nextAiring.episode - 1);
+    } else if (streamingCount > 0) {
+      totalEpisodes = streamingCount;
+    } else if (rawStatus === 'FINISHED') {
+      totalEpisodes = format === 'MOVIE' ? 1 : 12;
+    } else {
+      totalEpisodes = 0;
+    }
+
+    let availableEpisodes = 0;
+    if (isUpcoming) {
+      availableEpisodes = 0;
+    } else if (isAiring) {
+      if (nextAiring && nextAiring.episode > 0) {
+        availableEpisodes = Math.max(0, nextAiring.episode - 1);
+      } else if (streamingCount > 0) {
+        availableEpisodes = streamingCount;
+      } else {
+        availableEpisodes = Math.max(0, totalEpisodes);
+      }
+    } else if (format === 'MOVIE') {
+      availableEpisodes = 1;
+    } else {
+      availableEpisodes = Math.max(0, totalEpisodes);
+    }
+
+    return {
+      status: rawStatus,
+      isUpcoming,
+      isAiring,
+      totalEpisodes,
+      availableEpisodes,
+      nextAiringEpisode: nextAiring
+    };
   }
 
   const MEDIA_FIELDS = `
@@ -66,9 +251,18 @@
   function parseMediaItem(item) {
     if (!item) return null;
     const titleObj = item.title || {};
-    const english = titleObj.english && titleObj.english !== 'null' ? titleObj.english : '';
-    const romaji = titleObj.romaji && titleObj.romaji !== 'null' ? titleObj.romaji : '';
-    const native = titleObj.native && titleObj.native !== 'null' ? titleObj.native : '';
+    const englishRaw = titleObj.english && titleObj.english !== 'null' ? titleObj.english.trim() : '';
+    const romaji = titleObj.romaji && titleObj.romaji !== 'null' ? titleObj.romaji.trim() : '';
+    const native = titleObj.native && titleObj.native !== 'null' ? titleObj.native.trim() : '';
+    const synonyms = Array.isArray(item.synonyms) ? item.synonyms.map(s => String(s || '').trim()).filter(Boolean) : [];
+
+    // Prefer distinct ASCII English synonym if english title is missing or identical to romaji (Android parity)
+    let english = englishRaw;
+    if (!englishRaw || (romaji && isSimilarToRomaji(englishRaw, romaji))) {
+      const candidateSynonym = synonyms.find(syn => /^[\x00-\x7F]+$/.test(syn) && !isSimilarToRomaji(syn, romaji));
+      if (candidateSynonym) english = candidateSynonym;
+    }
+
     const mainTitle = english || romaji || native || 'Untitled Anime';
 
     const cover = (item.coverImage && (item.coverImage.extraLarge || item.coverImage.large)) || '';
@@ -76,20 +270,41 @@
 
     // Clean up HTML tags from description
     const rawDesc = item.description || 'No description available.';
-    const cleanDesc = rawDesc.replace(/<[^>]*>/g, '').trim();
+    const cleanDesc = rawDesc.replace(/<[^>]*>/g, '').trim() || 'No synopsis available.';
 
     // Studio name
-    let studio = 'Unknown';
+    let studio = 'Studio';
     if (item.studios && item.studios.nodes && item.studios.nodes.length > 0) {
-      studio = item.studios.nodes[0].name || 'Unknown';
+      studio = item.studios.nodes[0].name || 'Studio';
     }
 
     // Rating normalized to 10-point scale
     const rawScore = item.averageScore || 0;
     const rating = rawScore > 0 ? (rawScore / 10).toFixed(1) : '—';
 
-    // Format episode count
-    const totalEpisodes = item.episodes || 0;
+    const epState = computeEpisodeAvailability(item);
+    const genreArr = Array.isArray(item.genres) ? item.genres : [];
+    const genresStr = genreArr.join(', ');
+    const ageRating = /ecchi|horror/i.test(genresStr) ? 'R' : 'PG-13';
+
+    // Map optional streamingEpisodes metadata (titles + thumbnails) by episode number
+    const episodeMetadata = {};
+    if (Array.isArray(item.streamingEpisodes)) {
+      item.streamingEpisodes.forEach((se, idx) => {
+        if (!se) return;
+        const rawTitle = String(se.title || '').trim();
+        const numMatch = rawTitle.match(/(?:episode|ep\.?)\s*(\d+)/i);
+        const epNum = numMatch ? parseInt(numMatch[1], 10) : (idx + 1);
+        const cleanEpTitle = rawTitle.replace(/^(?:episode|ep\.?)\s*\d+\s*[-:–—]?\s*/i, '').trim() || `Episode ${epNum}`;
+        if (epNum > 0 && !episodeMetadata[epNum]) {
+          episodeMetadata[epNum] = {
+            number: epNum,
+            title: cleanEpTitle,
+            thumbnail: se.thumbnail || ''
+          };
+        }
+      });
+    }
 
     return {
       id: String(item.id),
@@ -97,22 +312,48 @@
       title: mainTitle,
       englishTitle: english || mainTitle,
       romajiTitle: romaji || mainTitle,
-      nativeTitle: native,
+      nativeTitle: native || mainTitle,
       coverImage: cover,
       bannerImage: banner,
       synopsis: cleanDesc,
       rating: parseFloat(rating) || 0,
       ratingDisplay: rating,
+      ageRating,
+      quality: 'HD',
       year: item.seasonYear || '',
       season: item.season || '',
-      status: item.status || 'FINISHED',
+      status: epState.status,
+      isUpcoming: epState.isUpcoming,
+      isAiring: epState.isAiring,
       type: item.format || 'TV',
-      totalEpisodes,
-      genres: Array.isArray(item.genres) ? item.genres.join(', ') : (item.genres || ''),
-      genreList: item.genres || [],
+      totalEpisodes: epState.totalEpisodes,
+      availableEpisodes: epState.availableEpisodes,
+      genres: genresStr,
+      genreList: genreArr,
       studio,
-      nextAiringEpisode: item.nextAiringEpisode || null
+      nextAiringEpisode: epState.nextAiringEpisode,
+      episodeMetadata
     };
+  }
+
+  /**
+   * Ensure any anime object (including legacy saved library items) has accurate
+   * isUpcoming, isAiring, and availableEpisodes fields.
+   */
+  function normalizeAnime(anime) {
+    if (!anime) return null;
+    if (typeof anime.availableEpisodes === 'number' && typeof anime.isUpcoming === 'boolean') {
+      return anime;
+    }
+    const epState = computeEpisodeAvailability(anime);
+    return Object.assign({}, anime, {
+      status: epState.status,
+      isUpcoming: epState.isUpcoming,
+      isAiring: epState.isAiring,
+      totalEpisodes: epState.totalEpisodes,
+      availableEpisodes: epState.availableEpisodes,
+      nextAiringEpisode: epState.nextAiringEpisode || anime.nextAiringEpisode || null
+    });
   }
 
   async function executeGraphql(query, variables = {}) {
@@ -150,6 +391,9 @@
 
   const API = {
     queryAniList: executeGraphql,
+    SeasonLabeler,
+    computeEpisodeAvailability,
+    normalizeAnime,
 
     // ---- HOME CATALOG FEEDS ----
     async getTrending(page = 1, perPage = 20) {
@@ -226,8 +470,10 @@
       try {
         const data = await executeGraphql(query, { page: randomPage });
         const list = (data?.Page?.media || []).map(parseMediaItem).filter(Boolean);
-        if (list.length > 0) {
-          return list[Math.floor(Math.random() * list.length)];
+        const airedList = list.filter(a => a.availableEpisodes > 0);
+        const pool = airedList.length > 0 ? airedList : list;
+        if (pool.length > 0) {
+          return pool[Math.floor(Math.random() * pool.length)];
         }
       } catch (e) {
         console.warn('Random anime failed, fallback to trending', e);
@@ -296,17 +542,22 @@
       return list.map(parseMediaItem).filter(Boolean);
     },
 
-    // ---- ANIME DETAILS (WITH CHARACTERS & RELATIONS) ----
+    // ---- ANIME DETAILS (WITH STREAMING EPISODES, CHARACTERS, RELATIONS & RECOMMENDATIONS) ----
     async getAnimeDetails(id) {
       const isMal = String(id).startsWith('mal_');
-      const numericId = isMal ? parseInt(id.replace('mal_', ''), 10) : parseInt(id, 10);
+      const numericId = isMal ? parseInt(String(id).replace('mal_', ''), 10) : parseInt(id, 10);
       const filterArg = isMal ? 'idMal: $id' : 'id: $id';
 
       const query = `
         query ($id: Int) {
           Media(${filterArg}, type: ANIME) {
             ${MEDIA_FIELDS}
-            characters(page: 1, perPage: 14, sort: [ROLE, RELEVANCE]) {
+            streamingEpisodes {
+              title
+              thumbnail
+              url
+            }
+            characters(page: 1, perPage: 16, sort: [ROLE, RELEVANCE]) {
               edges {
                 role
                 node {
@@ -334,16 +585,33 @@
                 relationType
                 node {
                   id
+                  type
                   title {
                     english
                     romaji
+                    native
                   }
                   format
                   coverImage {
                     large
+                    extraLarge
                   }
                   averageScore
                   status
+                  episodes
+                  seasonYear
+                  nextAiringEpisode {
+                    airingAt
+                    timeUntilAiring
+                    episode
+                  }
+                }
+              }
+            }
+            recommendations(page: 1, perPage: 10, sort: [RATING_DESC]) {
+              nodes {
+                mediaRecommendation {
+                  ${MEDIA_FIELDS}
                 }
               }
             }
@@ -376,26 +644,62 @@
         });
       });
 
-      // Parse Relations
+      // Parse Anime-only Relations with SeasonLabeler friendly labels (never raw ADAPTATION)
       const relations = [];
       const relEdges = media.relations?.edges || [];
       relEdges.forEach((edge) => {
         const node = edge.node;
         if (!node) return;
-        const relTitle = node.title?.english || node.title?.romaji || 'Related Anime';
+        const nodeType = String(node.type || 'ANIME').toUpperCase();
+        const nodeFormat = String(node.format || 'TV').toUpperCase();
+        if (nodeType !== 'ANIME' || ['MANGA', 'NOVEL', 'ONE_SHOT'].includes(nodeFormat)) {
+          return;
+        }
+        const relTitle = node.title?.english || node.title?.romaji || node.title?.native || 'Related Anime';
+        const relRomaji = node.title?.romaji || relTitle;
+        const relNative = node.title?.native || relTitle;
+        const rawRelType = edge.relationType || 'RELATED';
+        const friendlyLabel = SeasonLabeler.seasonLabel(relTitle, rawRelType, nodeFormat, 'Season');
+        const seasonNum = SeasonLabeler.seasonNumberFromTitle(relTitle);
+        const epState = computeEpisodeAvailability(node);
+
         relations.push({
           id: String(node.id),
-          relationType: edge.relationType || 'RELATED',
+          relationType: rawRelType,
+          friendlyLabel,
+          seasonNumber: seasonNum,
           title: relTitle,
-          format: node.format || 'TV',
-          coverImage: node.coverImage?.large || '',
-          rating: node.averageScore ? (node.averageScore / 10).toFixed(1) : '',
-          status: node.status || ''
+          englishTitle: node.title?.english || relTitle,
+          romajiTitle: relRomaji,
+          nativeTitle: relNative,
+          format: nodeFormat,
+          type: nodeFormat,
+          coverImage: node.coverImage?.extraLarge || node.coverImage?.large || '',
+          rating: node.averageScore ? parseFloat((node.averageScore / 10).toFixed(1)) : 0,
+          ratingDisplay: node.averageScore ? (node.averageScore / 10).toFixed(1) : '',
+          year: node.seasonYear || '',
+          status: epState.status,
+          isUpcoming: epState.isUpcoming,
+          isAiring: epState.isAiring,
+          totalEpisodes: epState.totalEpisodes,
+          availableEpisodes: epState.availableEpisodes,
+          isCurrent: String(node.id) === String(base.id)
         });
+      });
+
+      // Parse Recommendations ("More Like This")
+      const recommendations = [];
+      const recNodes = media.recommendations?.nodes || [];
+      recNodes.forEach((rec) => {
+        const parsed = parseMediaItem(rec?.mediaRecommendation);
+        if (parsed && parsed.id !== base.id) {
+          recommendations.push(parsed);
+        }
       });
 
       base.characters = characters;
       base.relations = relations;
+      base.recommendations = recommendations;
 
       return base;
     },
@@ -438,6 +742,59 @@
       }
     },
 
+    // ---- ANILIST PUBLIC PROFILE WATCHLIST IMPORT (Ported from Android MalSyncService.kt) ----
+    async importFromAniList(username) {
+      const trimmed = String(username || '').trim();
+      if (!trimmed) {
+        throw new Error('Please enter a valid AniList username.');
+      }
+
+      const query = `
+        query ($userName: String) {
+          MediaListCollection(userName: $userName, type: ANIME) {
+            lists {
+              name
+              status
+              entries {
+                status
+                score
+                progress
+                media {
+                  ${MEDIA_FIELDS}
+                }
+              }
+            }
+          }
+        }
+      `;
+
+      const data = await executeGraphql(query, { userName: trimmed });
+      const lists = data?.MediaListCollection?.lists || [];
+      const imported = [];
+
+      lists.forEach((listObj) => {
+        const entries = listObj.entries || [];
+        entries.forEach((entry) => {
+          const parsed = parseMediaItem(entry.media);
+          if (!parsed) return;
+
+          const aniStatus = String(entry.status || 'CURRENT').toUpperCase();
+          let watchStatus = 'WATCHING';
+          if (aniStatus === 'COMPLETED') watchStatus = 'COMPLETED';
+          else if (aniStatus === 'PAUSED') watchStatus = 'ON_HOLD';
+          else if (aniStatus === 'DROPPED') watchStatus = 'DROPPED';
+          else if (aniStatus === 'PLANNING') watchStatus = 'PLAN_TO_WATCH';
+
+          imported.push(Object.assign({}, parsed, {
+            watchStatus,
+            progressEpisodes: Number(entry.progress || 0)
+          }));
+        });
+      });
+
+      return imported;
+    },
+
     // ---- ANIME REVIEWS (ANILIST PRIMARY + JIKAN MAL FALLBACK) ----
     async getMalReviews(malId, animeId) {
       if (!malId && !animeId) return [];
@@ -458,7 +815,7 @@
               Media(id: $id, type: ANIME) {
                 id
                 idMal
-                reviews(page: 1, perPage: 8, sort: [RATING_DESC, ID_DESC]) {
+                reviews(page: 1, perPage: 10, sort: [RATING_DESC, ID_DESC]) {
                   nodes {
                     id
                     summary
@@ -471,6 +828,7 @@
                       name
                       avatar {
                         medium
+                        large
                       }
                     }
                   }
@@ -483,7 +841,7 @@
               Media(idMal: $idMal, type: ANIME) {
                 id
                 idMal
-                reviews(page: 1, perPage: 8, sort: [RATING_DESC, ID_DESC]) {
+                reviews(page: 1, perPage: 10, sort: [RATING_DESC, ID_DESC]) {
                   nodes {
                     id
                     summary
@@ -496,6 +854,7 @@
                       name
                       avatar {
                         medium
+                        large
                       }
                     }
                   }
@@ -512,7 +871,7 @@
           nodes.forEach((item, i) => {
             const user = item.user || {};
             const author = user.name || 'AniList Reviewer';
-            const avatar = user.avatar?.medium || '';
+            const avatar = user.avatar?.large || user.avatar?.medium || '';
             const score = item.score ? Math.round(item.score / 10) : 8;
             const body = (item.body || item.summary || '').trim();
             if (!body) return;
@@ -544,7 +903,7 @@
       }
 
       // 2. Secondary / Supplement Fallback: Jikan (MyAnimeList) with 6000ms timeout
-      if (targetMalId && collectedReviews.length < 4) {
+      if (targetMalId && collectedReviews.length < 6) {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 6000);
 

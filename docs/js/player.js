@@ -1,7 +1,7 @@
 /**
  * Zenith Anime Web — Clean Native Video Player & Watch Tracking Engine
  * Direct un-hijacked iframe video stream embedding with instant multi-server switching,
- * Sub/Dub audio toggle, episode navigation, Theater Mode, Fullscreen, Share,
+ * Sub/Dub audio toggle, aired-episode-bounded navigation, Theater Mode, Fullscreen, Share,
  * and continuous watch history & progress tracking.
  */
 
@@ -30,18 +30,40 @@
     },
 
     /**
-     * Load and mount an anime episode
+     * Load and mount an anime episode, enforcing aired-episode limits
      */
     load(anime, episodeNumber = 1, options = {}) {
-      this.currentAnime = anime;
-      this.currentEpisode = parseInt(episodeNumber, 10) || 1;
+      const normalized = window.ZenithAPI?.normalizeAnime ? window.ZenithAPI.normalizeAnime(anime) : anime;
+      this.currentAnime = normalized;
+
+      const availableEps = typeof normalized.availableEpisodes === 'number'
+        ? normalized.availableEpisodes
+        : (normalized.isUpcoming ? 0 : (normalized.totalEpisodes || 0));
+
+      const requestedEp = Math.max(1, parseInt(episodeNumber, 10) || 1);
 
       const settings = window.ZenithStorage?.getSettings() || {};
       this.currentServer = options.server || settings.defaultServer || 'aniembed';
       this.currentLanguage = options.language || settings.defaultAudio || 'sub';
 
+      // Guard 1: Anime has not aired any episodes yet
+      if (normalized.isUpcoming || availableEps <= 0) {
+        this.stopProgressTracking();
+        this.currentEpisode = 1;
+        this.renderUnreleasedState();
+        return;
+      }
+
+      // Guard 2: Requested episode exceeds aired available episodes
+      if (requestedEp > availableEps) {
+        this.currentEpisode = availableEps;
+        window.ZenithUI?.showToast(`Episode ${requestedEp} has not aired yet — playing latest Episode ${availableEps}`);
+      } else {
+        this.currentEpisode = requestedEp;
+      }
+
       // Restore saved progress for this episode if previously watched
-      const saved = window.ZenithStorage?.getProgress(anime.id, this.currentEpisode);
+      const saved = window.ZenithStorage?.getProgress(normalized.id, this.currentEpisode);
       this.estimatedDuration = saved && saved.durationSec ? saved.durationSec : 1440;
       this.playbackSeconds = saved
         ? Math.min(this.estimatedDuration, Math.max(0, saved.currentTimeSec || 0))
@@ -49,6 +71,47 @@
 
       this.renderPlayer();
       this.startProgressTracking();
+    },
+
+    /**
+     * Render clean notice when user navigates to #watch for an upcoming/unreleased anime
+     */
+    renderUnreleasedState() {
+      const container = document.getElementById('player-viewport-container');
+      if (!container || !this.currentAnime) return;
+
+      const anime = this.currentAnime;
+      const displayTitle = window.ZenithStorage?.getDisplayTitle
+        ? window.ZenithStorage.getDisplayTitle(anime)
+        : anime.title;
+
+      let countdownNote = 'Episodes will become playable as soon as the official broadcast begins.';
+      if (anime.nextAiringEpisode && anime.nextAiringEpisode.timeUntilAiring > 0) {
+        const sec = anime.nextAiringEpisode.timeUntilAiring;
+        const d = Math.floor(sec / 86400);
+        const h = Math.floor((sec % 86400) / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        countdownNote = `Episode ${anime.nextAiringEpisode.episode} airs in ${d > 0 ? `${d}d ` : ''}${h}h ${m}m.`;
+      }
+
+      container.innerHTML = `
+        <div class="player-wrapper player-unreleased-box">
+          <div class="unreleased-player-inner">
+            <div class="unreleased-icon-circle">
+              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+            </div>
+            <h2>${displayTitle} — Not Yet Aired</h2>
+            <p>${countdownNote}</p>
+            <div class="unreleased-actions">
+              <a href="#details/${anime.id}" class="btn btn-primary">Back to Anime Details</a>
+              <a href="#schedule" class="btn btn-secondary">View Airing Schedule</a>
+            </div>
+          </div>
+        </div>
+      `;
     },
 
     /**
@@ -64,9 +127,12 @@
       const lang = this.currentLanguage;
 
       const embedUrl = window.ZenithAPI.getStreamUrl(server, anime, ep, lang);
-      const titleLang = window.ZenithStorage?.getSettings().titleLanguage || 'english';
-      const displayTitle = (titleLang === 'romaji' ? anime.romajiTitle : anime.englishTitle) || anime.title;
-      const totalEpisodes = anime.totalEpisodes || 24;
+      const displayTitle = window.ZenithStorage?.getDisplayTitle
+        ? window.ZenithStorage.getDisplayTitle(anime)
+        : anime.title;
+      const availableEpisodes = typeof anime.availableEpisodes === 'number'
+        ? anime.availableEpisodes
+        : (anime.totalEpisodes || 1);
 
       const saved = window.ZenithStorage?.getProgress(anime.id, ep);
       const isWatched = Boolean(saved?.completed || (this.playbackSeconds / this.estimatedDuration) >= 0.88);
@@ -93,6 +159,7 @@
           <!-- Interactive Episode Watch Progress Strip -->
           <div class="player-progress-strip" id="player-progress-strip">
             <div class="player-progress-track" id="player-progress-track" role="slider" aria-label="Episode Watch Progress Tracker" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progressPct}" title="Click or drag to adjust saved episode watch progress">
+              <div class="player-scrub-tooltip" id="player-scrub-tooltip">${formatTime(this.playbackSeconds)}</div>
               <div class="player-progress-fill" id="player-progress-fill" style="width: ${progressPct}%">
                 <span class="player-progress-thumb"></span>
               </div>
@@ -142,7 +209,7 @@
                 <span>Audio</span>
               </button>
 
-              <!-- Previous & Next Episode Navigation -->
+              <!-- Previous & Next Episode Navigation (Bounded by availableEpisodes) -->
               <div class="ep-nav-group">
                 <button type="button" class="stream-ctrl-btn" id="ctrl-prev" ${ep <= 1 ? 'disabled' : ''} title="Previous Episode">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -151,7 +218,7 @@
                   <span>Prev</span>
                 </button>
 
-                <button type="button" class="stream-ctrl-btn" id="ctrl-next" ${ep >= (totalEpisodes > 0 ? totalEpisodes : 999) ? 'disabled' : ''} title="Next Episode">
+                <button type="button" class="stream-ctrl-btn" id="ctrl-next" ${ep >= availableEpisodes ? 'disabled' : ''} title="${ep >= availableEpisodes ? 'Latest aired episode reached' : 'Next Episode'}">
                   <span>Next</span>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/>
@@ -264,7 +331,7 @@
         }
       });
 
-      // 4. Previous / Next episode navigation via hash change
+      // 4. Previous / Next episode navigation via hash change (strictly bounded by availableEpisodes)
       document.getElementById('ctrl-prev')?.addEventListener('click', () => {
         if (this.currentEpisode > 1) {
           window.location.hash = `#watch/${this.currentAnime.id}/${this.currentEpisode - 1}`;
@@ -272,8 +339,10 @@
       });
 
       document.getElementById('ctrl-next')?.addEventListener('click', () => {
-        const total = this.currentAnime?.totalEpisodes || 999;
-        if (this.currentEpisode < total) {
+        const available = typeof this.currentAnime?.availableEpisodes === 'number'
+          ? this.currentAnime.availableEpisodes
+          : (this.currentAnime?.totalEpisodes || 1);
+        if (this.currentEpisode < available) {
           window.location.hash = `#watch/${this.currentAnime.id}/${this.currentEpisode + 1}`;
         }
       });
@@ -333,31 +402,46 @@
         window.ZenithUI?.showToast(nowWatched ? `Episode ${this.currentEpisode} marked as watched!` : `Episode ${this.currentEpisode} marked as unwatched`);
       });
 
-      // 9. Interactive Episode Progress Scrubber
+      // 9. Interactive Episode Progress Scrubber with floating time bubble
       const track = document.getElementById('player-progress-track');
+      const tooltip = document.getElementById('player-scrub-tooltip');
       if (track) {
         let isDragging = false;
-        const scrubToClientX = (clientX) => {
+        const scrubToClientX = (clientX, updatePlayback = true) => {
           const rect = track.getBoundingClientRect();
           if (!rect.width) return;
           const ratio = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-          this.playbackSeconds = Math.round(ratio * this.estimatedDuration);
-          this.updateProgressUI();
-          this.saveCurrentProgress();
+          const targetSec = Math.round(ratio * this.estimatedDuration);
+          if (tooltip) {
+            tooltip.textContent = formatTime(targetSec);
+            tooltip.style.left = `${ratio * 100}%`;
+          }
+          if (updatePlayback) {
+            this.playbackSeconds = targetSec;
+            this.updateProgressUI();
+            this.saveCurrentProgress();
+          }
         };
 
+        track.addEventListener('pointerenter', () => {
+          track.classList.add('scrub-hover');
+        });
+        track.addEventListener('pointerleave', () => {
+          if (!isDragging) track.classList.remove('scrub-hover');
+        });
         track.addEventListener('pointerdown', (e) => {
           isDragging = true;
+          track.classList.add('scrub-hover');
           track.setPointerCapture?.(e.pointerId);
-          scrubToClientX(e.clientX);
+          scrubToClientX(e.clientX, true);
         });
         track.addEventListener('pointermove', (e) => {
-          if (!isDragging) return;
-          scrubToClientX(e.clientX);
+          scrubToClientX(e.clientX, isDragging);
         });
         track.addEventListener('pointerup', (e) => {
           if (!isDragging) return;
           isDragging = false;
+          track.classList.remove('scrub-hover');
           track.releasePointerCapture?.(e.pointerId);
         });
       }
@@ -385,15 +469,10 @@
     // CONTINUOUS WATCH TIME, HISTORY & PROGRESS TRACKING
     // =========================================================================
 
-    /**
-     * Start background progress tracking for watch history and elapsed time
-     */
     startProgressTracking() {
       this.stopProgressTracking();
-      // Record initial visit immediately into storage (History & Continue Watching)
       this.saveCurrentProgress();
 
-      // Silent background ticker: increments watch time when tab is visible and persists progress
       this.timer = setInterval(() => {
         if (document.hidden) return;
         if (this.playbackSeconds < this.estimatedDuration) {
@@ -401,16 +480,12 @@
           this.updateProgressUI();
         }
 
-        // Auto-persist every 5 seconds
         if (this.playbackSeconds % 5 === 0) {
           this.saveCurrentProgress();
         }
       }, 1000);
     },
 
-    /**
-     * Stop tracking interval and persist final watch progress
-     */
     stopProgressTracking() {
       if (this.timer) {
         clearInterval(this.timer);
@@ -419,26 +494,29 @@
       this.saveCurrentProgress();
     },
 
-    /**
-     * Persist current watch progress to ZenithStorage
-     */
     saveCurrentProgress() {
       if (!this.currentAnime || !this.currentEpisode) return;
+      if (this.currentAnime.isUpcoming || (typeof this.currentAnime.availableEpisodes === 'number' && this.currentAnime.availableEpisodes <= 0)) {
+        return;
+      }
 
       const duration = this.estimatedDuration || 1440;
       const clampedSec = Math.min(duration, Math.max(0, this.playbackSeconds));
       const existing = window.ZenithStorage?.getProgress(this.currentAnime.id, this.currentEpisode);
       const isCompleted = Boolean(existing?.completed || (duration > 0 && (clampedSec / duration) >= 0.88));
+      const epMeta = this.currentAnime.episodeMetadata && this.currentAnime.episodeMetadata[this.currentEpisode];
 
       window.ZenithStorage?.saveProgress({
         animeId: this.currentAnime.id,
-        animeTitle: this.currentAnime.title,
+        animeTitle: window.ZenithStorage?.getDisplayTitle ? window.ZenithStorage.getDisplayTitle(this.currentAnime) : this.currentAnime.title,
         episodeNumber: this.currentEpisode,
+        episodeTitle: epMeta?.title || existing?.episodeTitle || `Episode ${this.currentEpisode}`,
         coverImage: this.currentAnime.coverImage,
         bannerImage: this.currentAnime.bannerImage,
         currentTimeSec: clampedSec,
         durationSec: duration,
         completed: isCompleted,
+        availableEpisodes: this.currentAnime.availableEpisodes,
         language: this.currentLanguage
       });
     }

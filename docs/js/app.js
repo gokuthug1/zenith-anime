@@ -278,6 +278,10 @@
         clearInterval(window.ZenithUI.heroInterval);
         window.ZenithUI.heroInterval = null;
       }
+      if (rootRoute !== 'details' && window.ZenithUI?.airingCountdownInterval) {
+        clearInterval(window.ZenithUI.airingCountdownInterval);
+        window.ZenithUI.airingCountdownInterval = null;
+      }
 
       // Persist & stop tracking if transitioning away from watch
       if (this.currentRoute === 'watch' && rootRoute !== 'watch') {

@@ -1,7 +1,8 @@
 /**
  * Zenith Anime Web — Local-First Storage & State Management
  * Persistent storage using LocalStorage with continuous progress tracking,
- * full library organization, and backup export/import compatible with Android.
+ * full library organization (with Android LibrarySort parity), aired episode awareness,
+ * and backup export/import compatible with the Zenith Anime Android APK.
  */
 
 (function (window) {
@@ -17,9 +18,13 @@
 
   const DEFAULT_SETTINGS = {
     accent: 'emerald',
-    titleLanguage: 'english', // 'english' | 'romaji'
+    titleLanguage: 'english', // 'english' | 'romaji' | 'native'
     defaultServer: 'aniembed', // 'aniembed' | 'viduki' | 'megaplay' | 'vidsrc'
     defaultAudio: 'sub', // 'sub' | 'dub'
+    episodeLayout: 'grid', // 'grid' | 'numbers' | 'list'
+    spoilerBlurCovers: false,
+    continueWatchingShowNextEpisode: true,
+    librarySortOrder: 'updated', // 'updated' | 'title' | 'title_desc' | 'score' | 'year' | 'episodes'
     reduceAnimations: false
   };
 
@@ -41,6 +46,39 @@
     }
   }
 
+  function buildLibraryRecord(anime, existing = {}) {
+    const norm = window.ZenithAPI?.normalizeAnime ? window.ZenithAPI.normalizeAnime(anime) : anime;
+    return {
+      id: String(norm.id),
+      malId: norm.malId || existing.malId || '',
+      title: norm.title || existing.title || 'Anime',
+      englishTitle: norm.englishTitle || norm.title || existing.englishTitle || '',
+      romajiTitle: norm.romajiTitle || norm.title || existing.romajiTitle || '',
+      nativeTitle: norm.nativeTitle || existing.nativeTitle || '',
+      coverImage: norm.coverImage || existing.coverImage || '',
+      bannerImage: norm.bannerImage || norm.coverImage || existing.bannerImage || '',
+      rating: Number(norm.rating ?? existing.rating ?? 0),
+      ratingDisplay: norm.ratingDisplay || (norm.rating > 0 ? Number(norm.rating).toFixed(1) : (existing.ratingDisplay || '—')),
+      year: norm.year || existing.year || '',
+      type: norm.type || existing.type || 'TV',
+      mediaStatus: norm.status !== 'WATCHING' && norm.status !== 'COMPLETED' && norm.status !== 'PLAN_TO_WATCH' && norm.status !== 'ON_HOLD' && norm.status !== 'DROPPED'
+        ? (norm.status || existing.mediaStatus || 'FINISHED')
+        : (existing.mediaStatus || 'FINISHED'),
+      isUpcoming: typeof norm.isUpcoming === 'boolean' ? norm.isUpcoming : Boolean(existing.isUpcoming),
+      isAiring: typeof norm.isAiring === 'boolean' ? norm.isAiring : Boolean(existing.isAiring),
+      totalEpisodes: Number(norm.totalEpisodes ?? existing.totalEpisodes ?? 0),
+      availableEpisodes: typeof norm.availableEpisodes === 'number'
+        ? norm.availableEpisodes
+        : Number(existing.availableEpisodes ?? norm.totalEpisodes ?? 0),
+      nextAiringEpisode: norm.nextAiringEpisode || existing.nextAiringEpisode || null,
+      genres: norm.genres || existing.genres || '',
+      isFavorite: Boolean(existing.isFavorite),
+      status: existing.status || null,
+      addedAt: existing.addedAt || Date.now(),
+      updatedAt: Date.now()
+    };
+  }
+
   const Storage = {
     // ---- SETTINGS ----
     getSettings() {
@@ -56,7 +94,6 @@
       const current = this.getSettings();
       const updated = Object.assign({}, current, partial);
       safeSet(KEYS.SETTINGS, updated);
-      // Also update standalone accent key for cross-page compatibility with landing.html
       if (partial.accent) {
         try {
           localStorage.setItem('zenith_accent', partial.accent);
@@ -65,6 +102,19 @@
         }
       }
       return updated;
+    },
+
+    // ---- DISPLAY TITLE HELPER (Ported from Android Anime.displayTitle) ----
+    getDisplayTitle(anime) {
+      if (!anime) return 'Anime';
+      const pref = (this.getSettings().titleLanguage || 'english').toLowerCase();
+      if (pref === 'romaji') {
+        return anime.romajiTitle || anime.title || anime.englishTitle || 'Anime';
+      }
+      if (pref === 'native' || pref === 'japanese') {
+        return anime.nativeTitle || anime.romajiTitle || anime.title || 'Anime';
+      }
+      return anime.englishTitle || anime.title || anime.romajiTitle || 'Anime';
     },
 
     // ---- RECENT SEARCHES ----
@@ -105,25 +155,10 @@
     },
 
     setWatchStatus(anime, status) {
-      if (!anime || !anime.id) return;
+      if (!anime || !anime.id) return null;
       const lib = this.getLibrary();
       const id = String(anime.id);
-      const existing = lib[id] || {
-        id,
-        malId: anime.malId || '',
-        title: anime.title || '',
-        englishTitle: anime.englishTitle || anime.title || '',
-        romajiTitle: anime.romajiTitle || anime.title || '',
-        coverImage: anime.coverImage || '',
-        bannerImage: anime.bannerImage || '',
-        rating: anime.rating || 0,
-        year: anime.year || '',
-        type: anime.type || 'TV',
-        totalEpisodes: anime.totalEpisodes || 0,
-        genres: anime.genres || '',
-        isFavorite: false,
-        addedAt: Date.now()
-      };
+      const existing = buildLibraryRecord(anime, lib[id] || {});
 
       if (!status || status === 'REMOVE') {
         if (!existing.isFavorite) {
@@ -146,22 +181,7 @@
       if (!anime || !anime.id) return false;
       const lib = this.getLibrary();
       const id = String(anime.id);
-      const existing = lib[id] || {
-        id,
-        malId: anime.malId || '',
-        title: anime.title || '',
-        englishTitle: anime.englishTitle || anime.title || '',
-        romajiTitle: anime.romajiTitle || anime.title || '',
-        coverImage: anime.coverImage || '',
-        bannerImage: anime.bannerImage || '',
-        rating: anime.rating || 0,
-        year: anime.year || '',
-        type: anime.type || 'TV',
-        totalEpisodes: anime.totalEpisodes || 0,
-        genres: anime.genres || '',
-        status: null,
-        addedAt: Date.now()
-      };
+      const existing = buildLibraryRecord(anime, lib[id] || {});
 
       existing.isFavorite = !existing.isFavorite;
       existing.updatedAt = Date.now();
@@ -177,42 +197,90 @@
       }
     },
 
-    getFilteredLibrary(tab = 'ALL', sortBy = 'updated') {
+    importWatchlistItems(animeList, replaceAll = false) {
+      if (!Array.isArray(animeList)) return 0;
+      const lib = replaceAll ? {} : this.getLibrary();
+      let count = 0;
+
+      animeList.forEach((item) => {
+        if (!item || !item.id) return;
+        const id = String(item.id);
+        const existing = lib[id] || {};
+        const record = buildLibraryRecord(item, existing);
+        record.status = item.watchStatus || existing.status || 'WATCHING';
+        record.updatedAt = Date.now();
+        lib[id] = record;
+        count++;
+      });
+
+      safeSet(KEYS.LIBRARY, lib);
+      return count;
+    },
+
+    getFilteredLibrary(tab = 'ALL', sortBy = 'updated', searchQuery = '') {
       const lib = this.getLibrary();
-      let items = Object.values(lib);
+      let items = Object.values(lib).map(entry => {
+        // Hydrate mediaStatus back to status on clone for card rendering while keeping watchStatus
+        const hydrated = Object.assign({}, entry, {
+          watchStatus: entry.status,
+          status: entry.mediaStatus || (entry.isUpcoming ? 'NOT_YET_RELEASED' : (entry.isAiring ? 'RELEASING' : 'FINISHED'))
+        });
+        return window.ZenithAPI?.normalizeAnime ? window.ZenithAPI.normalizeAnime(hydrated) : hydrated;
+      });
 
       switch (tab) {
         case 'WATCHING':
-          items = items.filter(i => i.status === 'WATCHING');
+          items = items.filter(i => i.watchStatus === 'WATCHING');
           break;
         case 'COMPLETED':
-          items = items.filter(i => i.status === 'COMPLETED');
+          items = items.filter(i => i.watchStatus === 'COMPLETED');
           break;
         case 'PLAN_TO_WATCH':
-          items = items.filter(i => i.status === 'PLAN_TO_WATCH');
+          items = items.filter(i => i.watchStatus === 'PLAN_TO_WATCH');
           break;
         case 'ON_HOLD':
-          items = items.filter(i => i.status === 'ON_HOLD');
+          items = items.filter(i => i.watchStatus === 'ON_HOLD');
           break;
         case 'DROPPED':
-          items = items.filter(i => i.status === 'DROPPED');
+          items = items.filter(i => i.watchStatus === 'DROPPED');
           break;
         case 'FAVORITES':
           items = items.filter(i => i.isFavorite);
           break;
         case 'ALL':
         default:
-          items = items.filter(i => i.status || i.isFavorite);
+          items = items.filter(i => i.watchStatus || i.isFavorite);
           break;
       }
 
+      if (searchQuery && searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        items = items.filter(i =>
+          (i.title || '').toLowerCase().includes(q) ||
+          (i.englishTitle || '').toLowerCase().includes(q) ||
+          (i.romajiTitle || '').toLowerCase().includes(q) ||
+          (i.genres || '').toLowerCase().includes(q)
+        );
+      }
+
+      // Ported from Android LibrarySort.kt
       items.sort((a, b) => {
-        if (sortBy === 'title') {
-          return (a.title || '').localeCompare(b.title || '');
-        } else if (sortBy === 'score') {
-          return (b.rating || 0) - (a.rating || 0);
-        } else {
-          return (b.updatedAt || b.addedAt || 0) - (a.updatedAt || a.addedAt || 0);
+        const titleA = this.getDisplayTitle(a);
+        const titleB = this.getDisplayTitle(b);
+        switch (sortBy) {
+          case 'title':
+            return titleA.localeCompare(titleB);
+          case 'title_desc':
+            return titleB.localeCompare(titleA);
+          case 'score':
+            return (b.rating || 0) - (a.rating || 0) || titleA.localeCompare(titleB);
+          case 'year':
+            return (Number(b.year) || 0) - (Number(a.year) || 0) || titleA.localeCompare(titleB);
+          case 'episodes':
+            return (b.availableEpisodes || b.totalEpisodes || 0) - (a.availableEpisodes || a.totalEpisodes || 0) || titleA.localeCompare(titleB);
+          case 'updated':
+          default:
+            return (b.updatedAt || b.addedAt || 0) - (a.updatedAt || a.addedAt || 0);
         }
       });
 
@@ -227,19 +295,19 @@
     getProgress(animeId, episodeNumber) {
       const all = this.getAllProgress();
       const key = `${animeId}_ep_${episodeNumber}`;
-      return all[key] || null;
+      return all[key] || all[`${animeId}_${episodeNumber}`] || null;
     },
 
     getLatestProgressForAnime(animeId) {
       const all = this.getAllProgress();
-      const matches = Object.values(all).filter(p => p.animeId === String(animeId));
+      const matches = Object.values(all).filter(p => String(p.animeId) === String(animeId));
       if (matches.length === 0) return null;
       matches.sort((a, b) => (b.lastWatchedAt || 0) - (a.lastWatchedAt || 0));
       return matches[0];
     },
 
     saveProgress(data) {
-      if (!data || !data.animeId || !data.episodeNumber) return;
+      if (!data || !data.animeId || !data.episodeNumber) return null;
       const all = this.getAllProgress();
       const key = `${data.animeId}_ep_${data.episodeNumber}`;
       const now = Date.now();
@@ -251,20 +319,49 @@
         ? data.completed
         : (duration > 0 && (currentTime / duration) >= 0.88);
 
+      const availableEps = typeof data.availableEpisodes === 'number'
+        ? data.availableEpisodes
+        : (existing.availableEpisodes || 0);
+
       all[key] = {
         id: key,
         animeId: String(data.animeId),
         animeTitle: data.animeTitle || existing.animeTitle || 'Anime',
         episodeNumber: Number(data.episodeNumber),
-        episodeTitle: data.episodeTitle || `Episode ${data.episodeNumber}`,
+        episodeTitle: data.episodeTitle || existing.episodeTitle || `Episode ${data.episodeNumber}`,
         coverImage: data.coverImage || existing.coverImage || '',
         bannerImage: data.bannerImage || existing.bannerImage || '',
         currentTimeSec: Math.floor(currentTime),
         durationSec: Math.floor(duration),
         language: data.language || existing.language || 'sub',
         completed: isCompleted,
+        availableEpisodes: availableEps,
         lastWatchedAt: now
       };
+
+      // Auto-queue next aired episode in Continue Watching if episode completed (Android selfHealWatchProgress parity)
+      const settings = this.getSettings();
+      if (isCompleted && settings.continueWatchingShowNextEpisode && availableEps > Number(data.episodeNumber)) {
+        const nextEp = Number(data.episodeNumber) + 1;
+        const nextKey = `${data.animeId}_ep_${nextEp}`;
+        if (!all[nextKey]) {
+          all[nextKey] = {
+            id: nextKey,
+            animeId: String(data.animeId),
+            animeTitle: data.animeTitle || existing.animeTitle || 'Anime',
+            episodeNumber: nextEp,
+            episodeTitle: `Episode ${nextEp}`,
+            coverImage: data.coverImage || existing.coverImage || '',
+            bannerImage: data.bannerImage || existing.bannerImage || '',
+            currentTimeSec: 0,
+            durationSec: 1440,
+            language: data.language || existing.language || 'sub',
+            completed: false,
+            availableEpisodes: availableEps,
+            lastWatchedAt: now + 5
+          };
+        }
+      }
 
       safeSet(KEYS.PROGRESS, all);
 
@@ -275,7 +372,8 @@
           id: data.animeId,
           title: data.animeTitle,
           coverImage: data.coverImage,
-          bannerImage: data.bannerImage
+          bannerImage: data.bannerImage,
+          availableEpisodes: availableEps
         }, 'WATCHING');
       }
 
@@ -287,14 +385,17 @@
       const existing = this.getProgress(anime.id, episodeNumber);
       const nextCompleted = !(existing && existing.completed);
       const duration = existing?.durationSec || 1440;
+      const epMeta = anime.episodeMetadata && anime.episodeMetadata[episodeNumber];
       this.saveProgress({
         animeId: anime.id,
-        animeTitle: anime.title,
+        animeTitle: this.getDisplayTitle(anime),
         episodeNumber: Number(episodeNumber),
+        episodeTitle: epMeta?.title || existing?.episodeTitle || `Episode ${episodeNumber}`,
         coverImage: anime.coverImage,
         bannerImage: anime.bannerImage,
-        currentTimeSec: nextCompleted ? duration : (existing?.currentTimeSec || 0),
+        currentTimeSec: nextCompleted ? duration : 0,
         durationSec: duration,
+        availableEpisodes: anime.availableEpisodes,
         completed: nextCompleted
       });
       return nextCompleted;
@@ -303,17 +404,24 @@
     deleteProgress(animeId, episodeNumber) {
       const all = this.getAllProgress();
       const key = `${animeId}_ep_${episodeNumber}`;
+      const legacyKey = `${animeId}_${episodeNumber}`;
+      let changed = false;
       if (all[key]) {
         delete all[key];
-        safeSet(KEYS.PROGRESS, all);
+        changed = true;
       }
+      if (all[legacyKey]) {
+        delete all[legacyKey];
+        changed = true;
+      }
+      if (changed) safeSet(KEYS.PROGRESS, all);
     },
 
     deleteProgressForAnime(animeId) {
       const all = this.getAllProgress();
       let changed = false;
       Object.keys(all).forEach(k => {
-        if (all[k].animeId === String(animeId)) {
+        if (String(all[k].animeId) === String(animeId)) {
           delete all[k];
           changed = true;
         }
@@ -351,14 +459,14 @@
       return progressList.slice(0, limit);
     },
 
-    // ---- BACKUP EXPORT & IMPORT ----
+    // ---- BACKUP EXPORT & IMPORT (100% Android APK Compatible) ----
     exportBackupJson() {
       const lib = this.getLibrary();
       const progress = this.getAllProgress();
       const settings = this.getSettings();
 
       const backup = {
-        version: 1,
+        version: 2,
         exportedAt: Date.now(),
         app: 'ZenithAnime',
         settings,
@@ -368,12 +476,15 @@
           title: a.title,
           englishTitle: a.englishTitle || a.title,
           romajiTitle: a.romajiTitle || a.title,
+          nativeTitle: a.nativeTitle || '',
           coverImage: a.coverImage,
           bannerImage: a.bannerImage,
           rating: a.rating,
           year: a.year,
           type: a.type,
+          status: a.mediaStatus || 'FINISHED',
           totalEpisodes: a.totalEpisodes,
+          availableEpisodes: a.availableEpisodes,
           genres: a.genres,
           isFavorite: Boolean(a.isFavorite),
           isInWatchlist: Boolean(a.status),
@@ -399,55 +510,54 @@
       return JSON.stringify(backup, null, 2);
     },
 
-    importBackupJson(jsonString) {
+    importBackupJson(jsonString, options = {}) {
+      const replaceAll = Boolean(options.replaceAll);
       try {
         const parsed = JSON.parse(jsonString);
-        if (!parsed || (parsed.app !== 'ZenithAnime' && !parsed.animeState)) {
+        if (!parsed || (parsed.app !== 'ZenithAnime' && !Array.isArray(parsed.animeState) && !Array.isArray(parsed.progressState))) {
           throw new Error('Invalid Zenith Anime backup file format');
         }
 
-        const lib = this.getLibrary();
+        const lib = replaceAll ? {} : this.getLibrary();
         if (Array.isArray(parsed.animeState)) {
           parsed.animeState.forEach(a => {
-            if (a.id) {
-              lib[String(a.id)] = {
-                id: String(a.id),
-                malId: a.malId || '',
-                title: a.title || 'Anime',
-                englishTitle: a.englishTitle || a.title,
-                romajiTitle: a.romajiTitle || a.title,
-                coverImage: a.coverImage || '',
-                bannerImage: a.bannerImage || a.coverImage || '',
-                rating: a.rating || 0,
-                year: a.year || '',
-                type: a.type || 'TV',
-                totalEpisodes: a.totalEpisodes || 0,
-                genres: a.genres || '',
-                isFavorite: Boolean(a.isFavorite),
-                status: a.watchStatus || (a.isCompleted ? 'COMPLETED' : (a.isInWatchlist ? 'WATCHING' : null)),
-                addedAt: a.lastUpdated || Date.now()
-              };
+            if (a && a.id) {
+              const id = String(a.id);
+              const existing = lib[id] || {};
+              const record = buildLibraryRecord(a, existing);
+              record.isFavorite = replaceAll ? Boolean(a.isFavorite) : Boolean(a.isFavorite || existing.isFavorite);
+              record.status = a.watchStatus || (a.isCompleted ? 'COMPLETED' : (a.isInWatchlist ? 'WATCHING' : (replaceAll ? null : existing.status)));
+              record.addedAt = a.lastUpdated || existing.addedAt || Date.now();
+              record.updatedAt = a.lastUpdated || Date.now();
+              if (record.isFavorite || record.status) {
+                lib[id] = record;
+              }
             }
           });
           safeSet(KEYS.LIBRARY, lib);
         }
 
-        const progress = this.getAllProgress();
+        const progress = replaceAll ? {} : this.getAllProgress();
         if (Array.isArray(parsed.progressState)) {
           parsed.progressState.forEach(p => {
-            if (p.animeId && p.episodeNumber) {
+            if (p && p.animeId && p.episodeNumber) {
               const key = `${p.animeId}_ep_${p.episodeNumber}`;
+              const existing = progress[key];
+              if (!replaceAll && existing && (existing.lastWatchedAt || 0) > (Number(p.lastWatchedAt) || 0)) {
+                return;
+              }
               progress[key] = {
                 id: key,
                 animeId: String(p.animeId),
-                animeTitle: p.animeTitle || 'Anime',
+                animeTitle: p.animeTitle || existing?.animeTitle || 'Anime',
                 episodeNumber: Number(p.episodeNumber),
-                episodeTitle: p.episodeTitle || `Episode ${p.episodeNumber}`,
-                coverImage: p.coverImage || '',
+                episodeTitle: p.episodeTitle || existing?.episodeTitle || `Episode ${p.episodeNumber}`,
+                coverImage: p.coverImage || existing?.coverImage || '',
+                bannerImage: p.bannerImage || p.coverImage || existing?.bannerImage || '',
                 currentTimeSec: Number(p.currentTimeSec) || 0,
                 durationSec: Number(p.durationSec) || 1440,
                 language: p.language || 'sub',
-                completed: Boolean(p.completed),
+                completed: Boolean(p.completed || existing?.completed),
                 lastWatchedAt: Number(p.lastWatchedAt) || Date.now()
               };
             }
@@ -473,7 +583,6 @@
       localStorage.removeItem(KEYS.LIBRARY);
       localStorage.removeItem(KEYS.PROGRESS);
       localStorage.removeItem(KEYS.RECENT_SEARCHES);
-      // Keep settings intact unless explicitly reset
     }
   };
 

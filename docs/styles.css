@@ -4430,3 +4430,536 @@ input:checked + .slider-round:before {
     font-size: 0.64rem;
   }
 }
+
+
+/* ==========================================================================
+   Android APK Parity Enhancements: Aired Episode Limiting, Live Countdown,
+   3-Mode Episode Layouts (Grid / Numbers / List), Lightbox & Sync
+   ========================================================================== */
+
+/* Card & Hero Airing / Upcoming Badges */
+.badge-ep.badge-upcoming,
+.badge-upcoming-pill {
+  background-color: rgba(245, 158, 11, 0.18) !important;
+  border-color: rgba(245, 158, 11, 0.48) !important;
+  color: #fbbf24 !important;
+}
+
+.badge-ep.badge-airing,
+.badge-airing-pill {
+  background-color: var(--color-accent-subtle) !important;
+  border-color: var(--color-accent-border) !important;
+  color: var(--color-accent) !important;
+}
+
+.status-dot.upcoming-dot {
+  background-color: #f59e0b;
+}
+
+/* Live Next Episode Airing Countdown Banner */
+.next-airing-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background-color: var(--color-accent-subtle);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-md);
+  padding: 8px 14px;
+  font-size: 0.85rem;
+  color: var(--color-text);
+  width: fit-content;
+}
+
+.airing-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--color-accent);
+  box-shadow: 0 0 8px var(--color-accent);
+  flex-shrink: 0;
+  animation: airingPulse 1.8s infinite ease-in-out;
+}
+
+@keyframes airingPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.3); opacity: 0.65; }
+}
+
+.next-airing-countdown {
+  font-family: var(--font-mono);
+  font-weight: 800;
+  color: var(--color-accent);
+  margin: 0 2px;
+}
+
+.next-airing-date {
+  color: var(--color-text-muted);
+  margin-left: 4px;
+}
+
+.btn-disabled-upcoming {
+  opacity: 0.85;
+  border-style: dashed;
+}
+
+/* Segmented Tab Item Count Pill */
+.details-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tab-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 800;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background-color: rgba(255, 255, 255, 0.08);
+  color: var(--color-text-secondary);
+}
+
+.details-tab-btn.active .tab-count-badge {
+  background-color: var(--color-accent-subtle);
+  color: var(--color-accent);
+}
+
+/* Unreleased / Upcoming Empty State Card */
+.unreleased-episodes-card,
+.player-unreleased-box {
+  background-color: var(--color-surface-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-10) var(--space-6);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.unreleased-player-inner {
+  max-width: 520px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: var(--space-8) var(--space-4);
+}
+
+.unreleased-icon-circle {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  background-color: var(--color-accent-subtle);
+  border: 1px solid var(--color-accent-border);
+  color: var(--color-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.unreleased-episodes-card h3,
+.unreleased-player-inner h2 {
+  font-size: 1.2rem;
+  font-weight: 800;
+  color: var(--color-text);
+}
+
+.unreleased-episodes-card p,
+.unreleased-player-inner p {
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+  max-width: 460px;
+}
+
+.unreleased-countdown-pill {
+  margin-top: 6px;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-accent-border);
+  border-radius: var(--radius-full);
+  padding: 6px 16px;
+  font-size: 0.84rem;
+  color: var(--color-text);
+}
+
+.unreleased-countdown-pill strong {
+  color: var(--color-accent);
+  font-family: var(--font-mono);
+}
+
+.unreleased-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 6px;
+}
+
+/* Enhanced Episodes Toolbar (Search + Range + SUB/DUB + 3 Layouts) */
+.episodes-toolbar-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.episodes-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.ep-search-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 240px;
+  max-width: 100%;
+}
+
+.ep-search-input-wrap svg {
+  position: absolute;
+  left: 11px;
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.ep-search-input {
+  width: 100%;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  padding: 6px 28px 6px 32px;
+  font-size: 0.82rem;
+  color: var(--color-text);
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.ep-search-input:focus {
+  border-color: var(--color-accent);
+}
+
+.ep-search-clear {
+  position: absolute;
+  right: 9px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.ep-audio-seg {
+  display: inline-flex;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  padding: 2px;
+}
+
+.ep-audio-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.ep-audio-btn.active {
+  background-color: var(--color-accent);
+  color: var(--color-text-inverse);
+}
+
+/* Mode 3: Compact 5-Column Numbers Grid (Android EpisodeNumberChip Parity) */
+.episodes-container.mode-numbers {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 600px) {
+  .episodes-container.mode-numbers {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+  }
+}
+
+.ep-number-chip {
+  position: relative;
+  height: 46px;
+  background-color: var(--color-surface-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  text-decoration: none;
+  font-weight: 800;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  overflow: hidden;
+  transition: all var(--transition-fast);
+}
+
+.ep-number-chip:hover {
+  border-color: var(--color-accent);
+  transform: translateY(-2px);
+  color: var(--color-accent);
+}
+
+.ep-number-chip.watched {
+  background-color: var(--color-accent-subtle);
+  border-color: var(--color-accent-border);
+  color: var(--color-accent);
+}
+
+.ep-chip-check {
+  font-size: 0.72rem;
+}
+
+.ep-chip-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background-color: rgba(255, 255, 255, 0.15);
+}
+
+.ep-chip-bar-fill {
+  display: block;
+  height: 100%;
+  background-color: var(--color-accent);
+}
+
+/* Quick Mark Watched Button on Episode Cards & Spoiler Cover Blur */
+.episode-box-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.btn-ep-quick-watch {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  border-radius: var(--radius-full);
+  padding: 3px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-ep-quick-watch:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.btn-ep-quick-watch.watched {
+  background-color: var(--color-accent-subtle);
+  border-color: var(--color-accent-border);
+  color: var(--color-accent);
+}
+
+.ep-thumb-preview.spoiler-blur-cover img {
+  filter: blur(12px) brightness(0.75);
+  transform: scale(1.08);
+  transition: filter 220ms ease, transform 220ms ease;
+}
+
+.episode-box:hover .ep-thumb-preview.spoiler-blur-cover img {
+  filter: blur(0) brightness(1);
+  transform: scale(1);
+}
+
+/* Player Scrub Floating Time Tooltip */
+.player-scrub-tooltip {
+  position: absolute;
+  bottom: 14px;
+  left: 0;
+  transform: translateX(-50%);
+  background-color: rgba(11, 14, 20, 0.95);
+  border: 1px solid var(--color-accent);
+  color: #ffffff;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  white-space: nowrap;
+  z-index: 10;
+}
+
+.player-progress-track.scrub-hover .player-scrub-tooltip {
+  opacity: 1;
+}
+
+/* Review Media Count Badge & Lightbox Modal */
+.review-media-badge {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+}
+
+.review-inline-img {
+  cursor: zoom-in;
+  transition: transform 180ms ease, border-color 180ms ease;
+}
+
+.review-inline-img:hover {
+  border-color: var(--color-accent);
+}
+
+.review-lightbox-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.review-lightbox-img {
+  max-width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+
+/* Overview Genres & Related Section Headings */
+.overview-genres-block {
+  margin-top: var(--space-6);
+}
+
+.overview-genre-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.overview-genre-chips .genre-chip {
+  text-decoration: none;
+}
+
+.related-section-heading {
+  font-size: 1.15rem;
+  font-weight: 800;
+  margin-bottom: var(--space-4);
+  color: var(--color-text);
+}
+
+/* My List In-Library Search & Settings AniList Sync / Legacy Backup */
+.mylist-actions-right {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.mylist-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.mylist-search-wrap svg {
+  position: absolute;
+  left: 11px;
+  color: var(--color-text-muted);
+  pointer-events: none;
+}
+
+.mylist-search-input {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 7px 12px 7px 32px;
+  font-size: 0.84rem;
+  color: var(--color-text);
+  outline: none;
+  width: 200px;
+  transition: border-color var(--transition-fast);
+}
+
+.mylist-search-input:focus {
+  border-color: var(--color-accent);
+}
+
+.sync-import-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.sync-username-input {
+  flex: 1;
+  min-width: 200px;
+  padding: 8px 14px;
+  font-size: 0.9rem;
+}
+
+.legacy-paste-details {
+  margin-top: 14px;
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+}
+
+.legacy-paste-details summary {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.legacy-paste-body {
+  margin-top: 10px;
+}
+
+.legacy-backup-textarea {
+  width: 100%;
+  background-color: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+@media (max-width: 600px) {
+  .ep-search-input-wrap,
+  .mylist-search-input {
+    width: 100%;
+  }
+
+  .episodes-toolbar-left,
+  .episodes-toolbar-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
