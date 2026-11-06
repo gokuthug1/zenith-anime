@@ -211,7 +211,9 @@ data class AppSettings(
     // ---- Audio & Background mode ----
     val audioOnlyBackgroundEnabled: Boolean = false,
     /** Comma-separated anime IDs for which the user enabled airing reminders on the Schedule screen. */
-    val airingReminderIds: String = ""
+    val airingReminderIds: String = "",
+    /** Default search maturity filter: "SFW Only" | "Include 18+" | "18+ Only". */
+    val adultContentFilter: String = "SFW Only"
 ) {
     companion object {
         /** Sane values used by the "Reset player preferences" action. */

@@ -12,3 +12,5 @@ local.properties
 .env
 debug.keystore
 .freebuff/
+TORRENT_STREAMING_ARCHITECTURE.md
+docs/TORRENT_STREAMING_ARCHITECTURE.md

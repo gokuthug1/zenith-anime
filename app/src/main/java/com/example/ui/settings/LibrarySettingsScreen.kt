@@ -159,5 +159,17 @@ fun LibrarySettingsScreen(
                 }
             )
         }
+
+        SettingsSection(title = "CONTENT & MATURITY") {
+            SettingChoiceRow(
+                title = "Adult & 18+ search filter",
+                subtitle = "Control whether 18+ / Hentai / Adult anime are shown in Search alongside Ecchi & standard anime",
+                currentValue = settings.adultContentFilter,
+                options = listOf("SFW Only", "Include 18+", "18+ Only"),
+                onSelect = { value ->
+                    repository.settingsManager.update { it.copy(adultContentFilter = value) }
+                }
+            )
+        }
     }
 }

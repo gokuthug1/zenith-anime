@@ -131,9 +131,10 @@ class AnimeRepository(private val context: Context) {
         season: String? = null,
         seasonYear: Int? = null,
         sort: String? = null,
-        genre: String? = null
+        genre: String? = null,
+        isAdult: Boolean? = false
     ): List<Anime> = withContext(Dispatchers.IO) {
-        val results = aniListService.searchAnimeFiltered(query, format, status, season, seasonYear, sort, genre)
+        val results = aniListService.searchAnimeFiltered(query, format, status, season, seasonYear, sort, genre, isAdult)
         if (results.isNotEmpty()) {
             val merged = upsertAllPreservingLocalState(results)
             merged.forEach { ensureEpisodesGenerated(it) }

@@ -235,6 +235,7 @@
     seasonYear
     season
     format
+    isAdult
     genres
     studios(isMain: true) {
       nodes {
@@ -283,9 +284,15 @@
     const rating = rawScore > 0 ? (rawScore / 10).toFixed(1) : '—';
 
     const epState = computeEpisodeAvailability(item);
-    const genreArr = Array.isArray(item.genres) ? item.genres : [];
+    const isAdult = Boolean(item.isAdult);
+    const genreArr = Array.isArray(item.genres) ? [...item.genres] : [];
+    if (isAdult && !genreArr.some(g => String(g).toLowerCase() === '18+')) {
+      genreArr.push('18+');
+    }
     const genresStr = genreArr.join(', ');
-    const ageRating = /ecchi|horror/i.test(genresStr) ? 'R' : 'PG-13';
+    const ageRating = (isAdult || /hentai/i.test(genresStr))
+      ? '18+'
+      : (/ecchi|horror/i.test(genresStr) ? 'R' : 'PG-13');
 
     // Map optional streamingEpisodes metadata (titles + thumbnails) by episode number
     const episodeMetadata = {};
@@ -442,16 +449,20 @@
     },
 
     async getByGenre(genre, page = 1, perPage = 20) {
+      const is18Plus = String(genre).toLowerCase() === '18+';
+      const isHentai = String(genre).toLowerCase() === 'hentai';
       const query = `
-        query ($genre: String, $page: Int, $perPage: Int) {
+        query ($genre: String, $isAdult: Boolean, $page: Int, $perPage: Int) {
           Page(page: $page, perPage: $perPage) {
-            media(type: ANIME, genre: $genre, sort: POPULARITY_DESC) {
+            media(type: ANIME, genre: $genre, isAdult: $isAdult, sort: POPULARITY_DESC) {
               ${MEDIA_FIELDS}
             }
           }
         }
       `;
-      const data = await executeGraphql(query, { genre, page, perPage });
+      const vars = { page, perPage, isAdult: is18Plus || isHentai };
+      if (!is18Plus) vars.genre = genre;
+      const data = await executeGraphql(query, vars);
       const list = data?.Page?.media || [];
       return list.map(parseMediaItem).filter(Boolean);
     },
@@ -484,7 +495,7 @@
 
     // ---- SEARCH & FILTER ----
     async searchAnime(queryStr, options = {}) {
-      const { format, status, season, seasonYear, genre, sort = 'POPULARITY_DESC' } = options;
+      const { format, status, season, seasonYear, genre, sort = 'POPULARITY_DESC', adultMode = 'sfw' } = options;
 
       const query = `
         query (
@@ -494,7 +505,8 @@
           $season: MediaSeason,
           $seasonYear: Int,
           $sort: [MediaSort],
-          $genre: String
+          $genre: String,
+          $isAdult: Boolean
         ) {
           Page(page: 1, perPage: 30) {
             media(
@@ -505,7 +517,8 @@
               season: $season,
               seasonYear: $seasonYear,
               sort: $sort,
-              genre: $genre
+              genre: $genre,
+              isAdult: $isAdult
             ) {
               ${MEDIA_FIELDS}
             }
@@ -525,7 +538,19 @@
       }
       if (season && season !== 'All') variables.season = season.toUpperCase();
       if (seasonYear && Number(seasonYear) > 1950) variables.seasonYear = Number(seasonYear);
-      if (genre && genre !== 'All') variables.genre = genre;
+
+      const isExplicit18Plus = String(genre || '').toLowerCase() === '18+';
+      const isHentaiGenre = String(genre || '').toLowerCase() === 'hentai';
+      if (genre && genre !== 'All' && !isExplicit18Plus) {
+        variables.genre = genre;
+      }
+
+      if (isExplicit18Plus || isHentaiGenre || adultMode === 'adult_only') {
+        variables.isAdult = true;
+      } else if (adultMode === 'sfw') {
+        variables.isAdult = false;
+      }
+      // When adultMode === 'include_adult', omit variables.isAdult so AniList returns both SFW and 18+ results.
 
       const sortMap = {
         'popularity': 'POPULARITY_DESC',

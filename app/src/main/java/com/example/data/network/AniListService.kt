@@ -45,6 +45,7 @@ class AniListService {
             episodes
             seasonYear
             format
+            isAdult
             genres
             studios(isMain: true) {
               nodes {
@@ -87,7 +88,8 @@ class AniListService {
         season: String? = null,
         seasonYear: Int? = null,
         sort: String? = null,
-        genre: String? = null
+        genre: String? = null,
+        isAdult: Boolean? = false
     ): List<Anime> = withContext(Dispatchers.IO) {
         val graphQL = """
             query (
@@ -97,7 +99,8 @@ class AniListService {
                 ${'$'}season: MediaSeason,
                 ${'$'}seasonYear: Int,
                 ${'$'}sort: [MediaSort],
-                ${'$'}genre: String
+                ${'$'}genre: String,
+                ${'$'}isAdult: Boolean
             ) {
               Page(page: 1, perPage: 30) {
                 media(
@@ -108,7 +111,8 @@ class AniListService {
                     season: ${'$'}season,
                     seasonYear: ${'$'}seasonYear,
                     sort: ${'$'}sort,
-                    genre: ${'$'}genre
+                    genre: ${'$'}genre,
+                    isAdult: ${'$'}isAdult
                 ) {
                   $MEDIA_FIELDS
                 }
@@ -130,13 +134,27 @@ class AniListService {
             }
             if (!season.isNullOrBlank() && season != "All") put("season", season.uppercase())
             if (seasonYear != null && seasonYear > 1900) put("seasonYear", seasonYear)
-            if (!genre.isNullOrBlank() && genre != "All") put("genre", genre)
+
+            val isExplicit18PlusChip = genre.equals("18+", ignoreCase = true)
+            val isHentaiGenre = genre.equals("Hentai", ignoreCase = true)
+            if (!genre.isNullOrBlank() && genre != "All" && !isExplicit18PlusChip) {
+                put("genre", genre)
+            }
+
+            val effectiveIsAdult: Boolean? = when {
+                isExplicit18PlusChip || isHentaiGenre -> true
+                else -> isAdult
+            }
+            if (effectiveIsAdult != null) {
+                put("isAdult", effectiveIsAdult)
+            }
 
             val sortVal = when (sort?.lowercase()) {
                 "popularity" -> "POPULARITY_DESC"
                 "score" -> "SCORE_DESC"
                 "recently added", "trending" -> "TRENDING_DESC"
-                "release date" -> "START_DATE_DESC"
+                "newest", "release date" -> "START_DATE_DESC"
+                "title a-z" -> "TITLE_ROMAJI"
                 else -> "POPULARITY_DESC"
             }
             put("sort", org.json.JSONArray().apply { put(sortVal) })
@@ -216,10 +234,12 @@ class AniListService {
     }
 
     suspend fun getAnimeByGenre(genre: String): List<Anime> = withContext(Dispatchers.IO) {
+        val isExplicit18Plus = genre.equals("18+", ignoreCase = true)
+        val isHentai = genre.equals("Hentai", ignoreCase = true)
         val graphQL = """
-            query (${'$'}genre: String) {
+            query (${'$'}genre: String, ${'$'}isAdult: Boolean) {
               Page(page: 1, perPage: 20) {
-                media(type: ANIME, genre: ${'$'}genre, sort: POPULARITY_DESC) {
+                media(type: ANIME, genre: ${'$'}genre, isAdult: ${'$'}isAdult, sort: POPULARITY_DESC) {
                   $MEDIA_FIELDS
                 }
               }
@@ -229,7 +249,8 @@ class AniListService {
         val jsonBody = JSONObject().apply {
             put("query", graphQL)
             put("variables", JSONObject().apply {
-                put("genre", genre)
+                if (!isExplicit18Plus) put("genre", genre)
+                put("isAdult", isExplicit18Plus || isHentai)
             })
         }
 
@@ -801,6 +822,7 @@ class AniListService {
 
             val year = item.optInt("seasonYear", 2024)
             val format = item.optString("format", "TV")
+            val isAdult = item.optBoolean("isAdult", false)
 
             val genresArray = item.optJSONArray("genres")
             val genreList = mutableListOf<String>()
@@ -808,6 +830,9 @@ class AniListService {
                 for (g in 0 until genresArray.length()) {
                     genreList.add(genresArray.getString(g))
                 }
+            }
+            if (isAdult && genreList.none { it.equals("18+", ignoreCase = true) }) {
+                genreList.add("18+")
             }
             val genresStr = if (genreList.isNotEmpty()) genreList.joinToString(", ") else "Anime"
 
@@ -840,7 +865,11 @@ class AniListService {
                 bannerImage = banner,
                 synopsis = cleanDesc.ifEmpty { "No synopsis available." },
                 rating = if (score > 0) score else 8.0,
-                ageRating = if (genresStr.contains("Ecchi") || genresStr.contains("Horror")) "R" else "PG-13",
+                ageRating = when {
+                    isAdult || genresStr.contains("Hentai", ignoreCase = true) -> "18+"
+                    genresStr.contains("Ecchi", ignoreCase = true) || genresStr.contains("Horror", ignoreCase = true) -> "R"
+                    else -> "PG-13"
+                },
                 quality = "HD",
                 year = year,
                 season = "$year",

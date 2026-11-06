@@ -113,6 +113,7 @@ fun SearchScreen(
     var filterStatus by remember { mutableStateOf("All") }
     var filterSeason by remember { mutableStateOf("All") }
     var filterSort by remember { mutableStateOf("Popularity") }
+    var filterAdult by remember(settings.adultContentFilter) { mutableStateOf(settings.adultContentFilter) }
 
     val searchPrefs = remember { context.getSharedPreferences("zenith_search_prefs", android.content.Context.MODE_PRIVATE) }
     var recentSearches by remember {
@@ -137,25 +138,74 @@ fun SearchScreen(
 
     val localAnime by repository.allAnime.collectAsState(initial = emptyList())
 
-    val genres = listOf("All", "Action", "Adventure", "Fantasy", "Shounen", "Supernatural", "Romance", "Comedy", "Drama")
+    val genres = listOf(
+        "All",
+        "Action",
+        "Adventure",
+        "Comedy",
+        "Drama",
+        "Ecchi",
+        "Fantasy",
+        "Hentai",
+        "18+",
+        "Horror",
+        "Mahou Shoujo",
+        "Mecha",
+        "Music",
+        "Mystery",
+        "Psychological",
+        "Romance",
+        "Sci-Fi",
+        "Shounen",
+        "Slice of Life",
+        "Sports",
+        "Supernatural",
+        "Thriller"
+    )
     val formats = listOf("All", "TV", "Movie", "OVA", "ONA", "Special")
     val statuses = listOf("All", "Currently Airing", "Finished Airing", "Not Yet Aired")
     val seasons = listOf("All", "Winter", "Spring", "Summer", "Fall")
     val sorts = listOf("Popularity", "Score", "Trending", "Newest", "Recently Added", "Title A-Z")
+    val adultModes = listOf("SFW Only", "Include 18+", "18+ Only")
 
-    fun triggerSearch(q: String) {
+    fun resolveIsAdultParam(genreValue: String, adultMode: String): Boolean? {
+        if (genreValue.equals("Hentai", ignoreCase = true) || genreValue.equals("18+", ignoreCase = true)) {
+            return true
+        }
+        return when (adultMode) {
+            "18+ Only" -> true
+            "Include 18+" -> null
+            else -> false
+        }
+    }
+
+    fun triggerSearch(
+        q: String = searchQuery,
+        genreOverride: String = selectedGenre,
+        adultOverride: String = filterAdult,
+        forceFilterQuery: Boolean = false
+    ) {
         val trimmed = q.trim()
-        if (trimmed.length >= 2) {
+        val hasActiveFilter = genreOverride != "All" ||
+            filterFormat != "All" ||
+            filterStatus != "All" ||
+            filterSeason != "All" ||
+            adultOverride != "SFW Only" ||
+            forceFilterQuery
+        if (trimmed.length >= 2 || hasActiveFilter) {
             isSearchingOnline = true
-            addRecentSearch(trimmed)
+            if (trimmed.length >= 2) {
+                addRecentSearch(trimmed)
+            }
             scope.launch {
                 val results = repository.searchOnlineFiltered(
-                    query = q.trim(),
+                    query = trimmed.ifBlank { null },
                     format = if (filterFormat != "All") filterFormat else null,
                     status = if (filterStatus != "All") filterStatus else null,
                     season = if (filterSeason != "All") filterSeason else null,
                     sort = filterSort,
-                    genre = if (selectedGenre != "All") selectedGenre else null
+                    genre = if (genreOverride != "All") genreOverride else null,
+                    isAdult = resolveIsAdultParam(genreOverride, adultOverride)
                 )
                 onlineResults = results
                 isSearchingOnline = false
@@ -182,6 +232,7 @@ fun SearchScreen(
         filterStatus,
         filterSeason,
         filterSort,
+        filterAdult,
         settings.titleLanguagePreference
     ) {
         val matched = combined.filter { anime ->
@@ -194,7 +245,23 @@ fun SearchScreen(
                     anime.nativeTitle.contains(searchQuery, ignoreCase = true) ||
                     anime.genres.contains(searchQuery, ignoreCase = true)
 
-            val matchesGenre = selectedGenre == "All" || anime.genres.contains(selectedGenre, ignoreCase = true)
+            val isAnimeAdult = anime.ageRating.equals("18+", ignoreCase = true) ||
+                    anime.genres.contains("Hentai", ignoreCase = true) ||
+                    anime.genres.contains("18+", ignoreCase = true)
+
+            val matchesGenre = when {
+                selectedGenre == "All" -> true
+                selectedGenre.equals("18+", ignoreCase = true) -> isAnimeAdult
+                else -> anime.genres.contains(selectedGenre, ignoreCase = true)
+            }
+
+            val matchesAdult = when {
+                selectedGenre.equals("Hentai", ignoreCase = true) || selectedGenre.equals("18+", ignoreCase = true) -> isAnimeAdult
+                filterAdult == "18+ Only" -> isAnimeAdult
+                filterAdult == "Include 18+" -> true
+                else -> !isAnimeAdult
+            }
+
             val matchesFormat = filterFormat == "All" || anime.type.equals(filterFormat, ignoreCase = true)
 
             val matchesStatus = when (filterStatus) {
@@ -208,7 +275,7 @@ fun SearchScreen(
 
             val matchesSeason = filterSeason == "All" || anime.season.contains(filterSeason, ignoreCase = true)
 
-            matchesQuery && matchesGenre && matchesFormat && matchesStatus && matchesSeason
+            matchesQuery && matchesGenre && matchesAdult && matchesFormat && matchesStatus && matchesSeason
         }
 
         when (filterSort) {
@@ -350,7 +417,7 @@ fun SearchScreen(
                 Icon(
                     imageVector = Icons.Default.Tune,
                     contentDescription = "Sort & Filter",
-                    tint = if (filterFormat != "All" || filterStatus != "All" || filterSeason != "All" || filterSort != "Popularity") themeAccent else Color.White
+                    tint = if (filterFormat != "All" || filterStatus != "All" || filterSeason != "All" || filterSort != "Popularity" || filterAdult != "SFW Only") themeAccent else Color.White
                 )
             }
         }
@@ -366,7 +433,12 @@ fun SearchScreen(
                     modifier = Modifier
                         .clip(RoundedCornerShape(16.dp))
                         .background(if (isSelected) themeAccent else MaterialTheme.colorScheme.surfaceVariant)
-                        .clickable { selectedGenre = genre }
+                        .clickable {
+                            selectedGenre = genre
+                            if (genre != "All") {
+                                triggerSearch(searchQuery, genreOverride = genre, forceFilterQuery = true)
+                            }
+                        }
                         .padding(horizontal = 14.dp, vertical = 6.dp)
                         .testTag("genre_chip_${genre.lowercase()}"),
                     contentAlignment = Alignment.Center
@@ -562,6 +634,8 @@ fun SearchScreen(
                             filterStatus = "All"
                             filterSeason = "All"
                             filterSort = "Popularity"
+                            filterAdult = "SFW Only"
+                            repository.settingsManager.update { it.copy(adultContentFilter = "SFW Only") }
                         }
                     ) {
                         Text("Reset", color = themeAccent, fontWeight = FontWeight.Bold)
@@ -569,6 +643,30 @@ fun SearchScreen(
                 }
 
                 HorizontalDivider(color = DarkBorder, thickness = 0.5.dp)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Content Rating / 18+ Filter
+                Text("MATURITY / 18+ CONTENT", color = TextSecondary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(adultModes) { mode ->
+                        FilterChip(
+                            selected = filterAdult == mode,
+                            onClick = {
+                                filterAdult = mode
+                                repository.settingsManager.update { it.copy(adultContentFilter = mode) }
+                            },
+                            label = { Text(mode, fontSize = 11.sp) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = themeAccent,
+                                selectedLabelColor = bgColor,
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                labelColor = TextPrimary
+                            )
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Format
@@ -658,7 +756,7 @@ fun SearchScreen(
                 Button(
                     onClick = {
                         showFilterSheet = false
-                        triggerSearch(searchQuery.ifBlank { "A" })
+                        triggerSearch(searchQuery, forceFilterQuery = true)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = themeAccent, contentColor = bgColor),
                     shape = RoundedCornerShape(12.dp),

@@ -478,7 +478,7 @@
             <!-- Genre Quick Filter Chips -->
             <section class="genre-chips-section">
               <div class="genre-chips-scroll">
-                ${['Action', 'Adventure', 'Fantasy', 'Shounen', 'Romance', 'Supernatural', 'Comedy', 'Drama', 'Sci-Fi', 'Mystery', 'Sports'].map(g => `
+                ${['Action', 'Adventure', 'Comedy', 'Drama', 'Ecchi', 'Fantasy', 'Hentai', '18+', 'Horror', 'Mecha', 'Mystery', 'Psychological', 'Romance', 'Sci-Fi', 'Shounen', 'Slice of Life', 'Sports', 'Supernatural', 'Thriller'].map(g => `
                   <button type="button" class="genre-chip" data-genre="${g}">
                     <span>${g}</span>
                   </button>
@@ -775,9 +775,15 @@
 
             <select class="filter-select" id="filter-genre" aria-label="Filter by Genre">
               <option value="All">All Genres</option>
-              ${['Action', 'Adventure', 'Comedy', 'Drama', 'Fantasy', 'Horror', 'Mecha', 'Mystery', 'Romance', 'Sci-Fi', 'Slice of Life', 'Sports', 'Supernatural'].map(g => `
+              ${['Action', 'Adventure', 'Comedy', 'Drama', 'Ecchi', 'Fantasy', 'Hentai', '18+', 'Horror', 'Mahou Shoujo', 'Mecha', 'Music', 'Mystery', 'Psychological', 'Romance', 'Sci-Fi', 'Shounen', 'Slice of Life', 'Sports', 'Supernatural', 'Thriller'].map(g => `
                 <option value="${g}" ${g === genre ? 'selected' : ''}>${g}</option>
               `).join('')}
+            </select>
+
+            <select class="filter-select" id="filter-adult" aria-label="Maturity & 18+ Filter">
+              <option value="sfw" ${(genre === 'Hentai' || genre === '18+') ? '' : 'selected'}>SFW Only</option>
+              <option value="include_adult" ${(genre === 'Hentai' || genre === '18+') ? 'selected' : ''}>Include 18+ / Adult</option>
+              <option value="adult_only">18+ / Hentai Only</option>
             </select>
 
             <select class="filter-select" id="filter-sort" aria-label="Sort Results">
@@ -822,6 +828,7 @@
         const format = document.getElementById('filter-format').value;
         const status = document.getElementById('filter-status').value;
         const selGenre = document.getElementById('filter-genre').value;
+        const selAdult = document.getElementById('filter-adult')?.value || 'sfw';
         const selSort = document.getElementById('filter-sort').value;
 
         try {
@@ -829,6 +836,7 @@
             format,
             status,
             genre: selGenre,
+            adultMode: selAdult,
             sort: selSort
           });
 
@@ -862,7 +870,7 @@
         performSearch();
       });
 
-      ['filter-format', 'filter-status', 'filter-genre', 'filter-sort'].forEach(id => {
+      ['filter-format', 'filter-status', 'filter-genre', 'filter-adult', 'filter-sort'].forEach(id => {
         document.getElementById(id)?.addEventListener('change', performSearch);
       });
 
