@@ -16,10 +16,10 @@ class AniEmbedProvider : StreamingProvider {
         supportsSub = true,
         supportsDub = true,
         supportsAutoNext = true,
-        supportsAutoSkipIntro = false,
+        supportsAutoSkipIntro = true,
         supportsProgressEvents = true,
         supportsStartAt = true,
-        requiresEmbed = true
+        requiresEmbed = false
     )
 
     override fun supportsAnime(anime: Anime): Boolean = anime.id.isNotEmpty()

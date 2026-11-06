@@ -845,21 +845,41 @@ fun PlayerScreen(
         if (!isReady) return@LaunchedEffect
         val introSkip = savedSettings.introSkipSeconds.coerceIn(5, 300).toLong()
         val outroSkip = savedSettings.outroSkipSeconds.coerceIn(5, 300).toLong()
-        if (savedSettings.autoSkipIntro && !introSkippedForEp &&
+        val chapterIntroStart = embedState.value.introStartSec
+        val chapterIntroEnd = embedState.value.introEndSec
+        val hasChapterIntro = usingEmbedFallback && chapterIntroEnd > chapterIntroStart && chapterIntroStart >= 0L
+        val inIntroWindow = if (hasChapterIntro) {
+            currentTimeSec in chapterIntroStart..(chapterIntroEnd - 2L).coerceAtLeast(chapterIntroStart)
+        } else {
             currentTimeSec in 2..30L && (durationSec <= 0L || durationSec > introSkip + 30L)
-        ) {
+        }
+        if (savedSettings.autoSkipIntro && !introSkippedForEp && inIntroWindow) {
             introSkippedForEp = true
-            val target = (currentTimeSec + introSkip).let { if (durationSec > 0) it.coerceAtMost(durationSec) else it }
+            val target = if (hasChapterIntro) {
+                chapterIntroEnd
+            } else {
+                (currentTimeSec + introSkip).let { if (durationSec > 0) it.coerceAtMost(durationSec) else it }
+            }
             currentTimeSec = target
             if (usingEmbedFallback) embedController.send("seek", target)
             else player.seekTo(target * 1000L)
-            Toast.makeText(context, "Auto-skipped OP (+${introSkip}s)", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Auto-skipped OP", Toast.LENGTH_SHORT).show()
         }
-        if (savedSettings.autoSkipOutro && !outroSkippedForEp && durationSec > outroSkip + 30L &&
-            currentTimeSec in (durationSec - outroSkip)..(durationSec - 8L)
-        ) {
+        val chapterOutroStart = embedState.value.outroStartSec
+        val chapterOutroEnd = embedState.value.outroEndSec
+        val hasChapterOutro = usingEmbedFallback && chapterOutroEnd > chapterOutroStart && chapterOutroStart >= 0L
+        val inOutroWindow = if (hasChapterOutro) {
+            currentTimeSec in chapterOutroStart..(chapterOutroEnd - 2L).coerceAtLeast(chapterOutroStart)
+        } else {
+            durationSec > outroSkip + 30L && currentTimeSec in (durationSec - outroSkip)..(durationSec - 8L)
+        }
+        if (savedSettings.autoSkipOutro && !outroSkippedForEp && inOutroWindow) {
             outroSkippedForEp = true
-            val target = minOf(currentTimeSec + outroSkip, (durationSec - 5L).coerceAtLeast(currentTimeSec))
+            val target = if (hasChapterOutro) {
+                chapterOutroEnd
+            } else {
+                minOf(currentTimeSec + outroSkip, (durationSec - 5L).coerceAtLeast(currentTimeSec))
+            }
             currentTimeSec = target
             if (usingEmbedFallback) embedController.send("seek", target)
             else player.seekTo(target * 1000L)
@@ -952,14 +972,49 @@ fun PlayerScreen(
         }
     }
 
-    LaunchedEffect(savedSettings.subtitlesEnabled) {
+    LaunchedEffect(
+        savedSettings.subtitlesEnabled,
+        savedSettings.subtitleFontSizeSp,
+        savedSettings.subtitleTextColor,
+        savedSettings.subtitleBackgroundColor,
+        savedSettings.subtitleOutline,
+        savedSettings.subtitleBold,
+        savedSettings.subtitlePosition,
+        usingEmbedFallback,
+        isReady
+    ) {
         player.trackSelectionParameters = player.trackSelectionParameters
             .buildUpon()
             .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, !savedSettings.subtitlesEnabled)
             .build()
+        if (usingEmbedFallback) {
+            val textColorHex = when (savedSettings.subtitleTextColor) {
+                "Yellow" -> "#FFEB3B"
+                "Cyan" -> "#00E5FF"
+                "Green" -> "#69F0AE"
+                else -> "#FFFFFF"
+            }
+            val bgCss = when (savedSettings.subtitleBackgroundColor) {
+                "Black", "BlackSolid" -> "rgba(0,0,0,0.9)"
+                "BlackSemi" -> "rgba(0,0,0,0.6)"
+                "Grey" -> "rgba(68,68,68,0.67)"
+                "None" -> "transparent"
+                else -> "rgba(0,0,0,0.6)"
+            }
+            val payload = org.json.JSONObject().apply {
+                put("enabled", savedSettings.subtitlesEnabled)
+                put("fontSizeSp", savedSettings.subtitleFontSizeSp)
+                put("textColor", textColorHex)
+                put("bgColor", bgCss)
+                put("outline", savedSettings.subtitleOutline)
+                put("bold", savedSettings.subtitleBold)
+                put("position", savedSettings.subtitlePosition)
+            }.toString()
+            embedController.send("setSubtitleStyle", payload)
+        }
     }
 
-    LaunchedEffect(savedSettings.videoFitMode, usingEmbedFallback) {
+    LaunchedEffect(savedSettings.videoFitMode, usingEmbedFallback, isReady) {
         if (usingEmbedFallback) {
             embedController.send("setFit", savedSettings.videoFitMode.lowercase())
         } else {
@@ -1603,6 +1658,7 @@ fun PlayerScreen(
                     isPlaying = embedState.value.playing
                     isBuffering = embedState.value.buffering
                     durationSec = embedState.value.durationSec
+                    bufferedTimeSec = embedState.value.bufferedSec
                     if (!isScrubbing && (System.currentTimeMillis() - lastSeekTimestampMs > 850L)) {
                         currentTimeSec = embedState.value.positionSec
                     }
@@ -2061,10 +2117,21 @@ fun PlayerScreen(
                 }
                 val introSkip = savedSettings.introSkipSeconds.coerceIn(5, 300)
                 val outroSkip = savedSettings.outroSkipSeconds.coerceIn(5, 300)
-                val showIntroSkip = !introSkippedForEp &&
-                    currentTimeSec in 0..(introSkip + 35).toLong()
-                val showOutroSkip = !outroSkippedForEp &&
-                    durationSec > 0 && currentTimeSec > durationSec - (outroSkip + 30).toLong()
+                val chapIntroStart = embedState.value.introStartSec
+                val chapIntroEnd = embedState.value.introEndSec
+                val hasChapIntro = usingEmbedFallback && chapIntroEnd > chapIntroStart && chapIntroStart >= 0L
+                val chapOutroStart = embedState.value.outroStartSec
+                val chapOutroEnd = embedState.value.outroEndSec
+                val hasChapOutro = usingEmbedFallback && chapOutroEnd > chapOutroStart && chapOutroStart >= 0L
+
+                val showIntroSkip = !introSkippedForEp && (
+                    if (hasChapIntro) currentTimeSec in chapIntroStart..chapIntroEnd
+                    else currentTimeSec in 0..(introSkip + 35).toLong()
+                )
+                val showOutroSkip = !outroSkippedForEp && (
+                    if (hasChapOutro) currentTimeSec in chapOutroStart..chapOutroEnd
+                    else durationSec > 0 && currentTimeSec > durationSec - (outroSkip + 30).toLong()
+                )
 
                 if (showIntroSkip || showOutroSkip) {
                     Column(
@@ -2076,24 +2143,28 @@ fun PlayerScreen(
                     ) {
                         if (showIntroSkip) {
                             SkipChip(
-                                label = "+${introSkip}s Skip OP",
+                                label = if (hasChapIntro) "Skip OP" else "+${introSkip}s Skip OP",
                                 accentColor = playerAccent,
                                 onClick = {
                                     introSkippedForEp = true
-                                    seekBy(introSkip.toLong())
+                                    if (hasChapIntro) seekTo(chapIntroEnd) else seekBy(introSkip.toLong())
                                 }
                             )
                         }
                         if (showOutroSkip) {
                             SkipChip(
-                                label = "+${outroSkip}s Skip ED",
+                                label = if (hasChapOutro) "Skip ED" else "+${outroSkip}s Skip ED",
                                 accentColor = playerAccent,
                                 onClick = {
                                     outroSkippedForEp = true
-                                    val target = minOf(
-                                        currentTimeSec + outroSkip.toLong(),
-                                        (durationSec - 5L).coerceAtLeast(currentTimeSec)
-                                    )
+                                    val target = if (hasChapOutro) {
+                                        chapOutroEnd
+                                    } else {
+                                        minOf(
+                                            currentTimeSec + outroSkip.toLong(),
+                                            (durationSec - 5L).coerceAtLeast(currentTimeSec)
+                                        )
+                                    }
                                     seekTo(target)
                                 }
                             )
@@ -2444,10 +2515,14 @@ fun PlayerScreen(
                         val displayedTimeSec = if (isScrubbing) scrubPosition else currentTimeSec
                         val introSkipDur = savedSettings.introSkipSeconds.coerceIn(5, 300).toLong()
                         val outroSkipDur = savedSettings.outroSkipSeconds.coerceIn(5, 300).toLong()
-                        val opRange = if (durationSec > introSkipDur + 90L) {
+                        val opRange = if (usingEmbedFallback && embedState.value.introEndSec > embedState.value.introStartSec && embedState.value.introStartSec >= 0L) {
+                            embedState.value.introStartSec..embedState.value.introEndSec.coerceAtMost(if (durationSec > 0) durationSec else embedState.value.introEndSec)
+                        } else if (durationSec > introSkipDur + 90L) {
                             85L..(85L + introSkipDur).coerceAtMost(durationSec)
                         } else null
-                        val edRange = if (durationSec > outroSkipDur + 120L) {
+                        val edRange = if (usingEmbedFallback && embedState.value.outroEndSec > embedState.value.outroStartSec && embedState.value.outroStartSec >= 0L) {
+                            embedState.value.outroStartSec..embedState.value.outroEndSec.coerceAtMost(if (durationSec > 0) durationSec else embedState.value.outroEndSec)
+                        } else if (durationSec > outroSkipDur + 120L) {
                             (durationSec - outroSkipDur).coerceAtLeast(0L)..durationSec
                         } else null
 
