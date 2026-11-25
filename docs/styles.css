@@ -4963,3 +4963,251 @@ input:checked + .slider-round:before {
     justify-content: space-between;
   }
 }
+
+/* ==========================================================================
+   Watch Time & Usage Statistics Dashboard (Settings Screen)
+   ========================================================================== */
+.usage-stats-card {
+  margin-bottom: var(--space-5);
+}
+
+.usage-stats-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: var(--space-4);
+}
+
+.usage-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: var(--space-5);
+}
+
+.usage-kpi-tile {
+  background-color: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+
+.usage-kpi-label {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin-bottom: 6px;
+}
+
+.usage-kpi-value {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--color-accent);
+  line-height: 1.2;
+}
+
+.usage-kpi-sub {
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+
+.usage-subgrid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 16px;
+}
+
+.usage-panel {
+  background-color: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+
+.usage-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.usage-panel-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.usage-legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+}
+
+.usage-legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 4px;
+}
+
+.usage-chart-bars {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  align-items: end;
+  gap: 6px;
+  height: 128px;
+  padding-top: 8px;
+}
+
+.usage-chart-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  gap: 4px;
+}
+
+.usage-bar-pair {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  width: 100%;
+  flex: 1;
+}
+
+.usage-bar-watch {
+  width: 10px;
+  max-width: 45%;
+  min-height: 3px;
+  border-radius: 4px 4px 0 0;
+  background-color: var(--color-accent);
+  transition: height var(--transition-fast);
+}
+
+.usage-bar-app {
+  width: 8px;
+  max-width: 40%;
+  min-height: 3px;
+  border-radius: 4px 4px 0 0;
+  background-color: var(--color-border-strong);
+  transition: height var(--transition-fast);
+}
+
+.usage-bar-label {
+  font-size: 0.68rem;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.usage-bar-label.is-today {
+  color: var(--color-accent);
+  font-weight: 700;
+}
+
+.usage-top-anime-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.usage-top-anime-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.usage-top-anime-cover {
+  width: 34px;
+  height: 46px;
+  border-radius: 6px;
+  object-fit: cover;
+  background-color: var(--color-surface);
+  flex-shrink: 0;
+}
+
+.usage-top-anime-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.usage-top-anime-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.usage-top-anime-sub {
+  font-size: 0.72rem;
+  color: var(--color-text-secondary);
+  margin: 2px 0 4px;
+}
+
+.usage-progress-bg {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background-color: var(--color-border);
+  overflow: hidden;
+}
+
+.usage-progress-fill {
+  height: 100%;
+  background-color: var(--color-accent);
+}
+
+.usage-genre-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.usage-genre-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: var(--radius-full);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  font-size: 0.75rem;
+  color: var(--color-text);
+}
+
+.usage-genre-pill span {
+  color: var(--color-accent);
+  font-weight: 700;
+}
+
+.usage-stats-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: var(--space-4);
+}
+
+@media (max-width: 900px) {
+  .usage-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .usage-subgrid {
+    grid-template-columns: 1fr;
+  }
+}

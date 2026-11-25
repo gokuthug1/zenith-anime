@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.HelpOutline
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
@@ -96,6 +97,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import com.example.data.model.UsageStatsCalculator
 import com.example.data.provider.ProviderManager
 import com.example.data.repository.AnimeRepository
 import com.example.ui.theme.AccentRed
@@ -207,6 +209,7 @@ fun saveBackupToDeviceStorage(context: android.content.Context, json: String): S
 @Composable
 fun ProfileScreen(
     repository: AnimeRepository,
+    onUsageStatsClick: () -> Unit = {},
     onMalSyncClick: () -> Unit = {},
     onPlayerSettingsClick: () -> Unit = {},
     onSubtitleSettingsClick: () -> Unit = {},
@@ -314,6 +317,14 @@ fun ProfileScreen(
     val watchHistory by repository.allHistory.collectAsState(initial = emptyList())
     val favorites by repository.favorites.collectAsState(initial = emptyList())
     val downloads by repository.allDownloads.collectAsState(initial = emptyList())
+    val dailyUsageStats by repository.dailyUsageStats.collectAsState(initial = emptyList())
+    val totalWatchTimeSec = remember(dailyUsageStats) {
+        dailyUsageStats.sumOf { it.watchTimeSec.coerceAtLeast(0L) }
+    }
+    val todayWatchTimeSec = remember(dailyUsageStats) {
+        val today = UsageStatsCalculator.localDateKey()
+        dailyUsageStats.firstOrNull { it.dateKey == today }?.watchTimeSec?.coerceAtLeast(0L) ?: 0L
+    }
 
     val providerManager = remember { ProviderManager() }
 
@@ -460,9 +471,29 @@ fun ProfileScreen(
                 .padding(horizontal = 16.dp, vertical = 8.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surface)
+                .clickable { onUsageStatsClick() }
                 .padding(vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceEvenly
         ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    text = UsageStatsCalculator.formatDuration(totalWatchTimeSec),
+                    color = themeAccent,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = "Watch Time",
+                    color = TextSecondary,
+                    fontSize = 11.sp
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .height(30.dp)
+                    .width(1.dp)
+                    .background(DarkBorder)
+            )
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
                     text = "${watchHistory.size}",
@@ -527,6 +558,12 @@ fun ProfileScreen(
                 icon = Icons.Default.Edit,
                 title = "Edit Profile",
                 onClick = { showEditProfileDialog = true }
+            )
+
+            ProfileMenuItem(
+                icon = Icons.Default.BarChart,
+                title = "Watch Time & Usage Statistics (Today: ${UsageStatsCalculator.formatDuration(todayWatchTimeSec)})",
+                onClick = onUsageStatsClick
             )
 
             ProfileMenuItem(

@@ -3,10 +3,13 @@ package com.example.data.repository
 import android.content.Context
 import com.example.data.local.AppDatabase
 import com.example.data.model.Anime
+import com.example.data.model.AnimeWatchStats
 import com.example.data.model.AppNotification
+import com.example.data.model.DailyUsageStats
 import com.example.data.model.DownloadItem
 import com.example.data.model.Episode
 import com.example.data.model.MalReview
+import com.example.data.model.UsageStatsCalculator
 import com.example.data.model.WatchProgress
 import com.example.data.model.WatchStatus
 import com.example.data.network.AniListService
@@ -16,6 +19,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import com.example.data.local.SettingsManager
 import com.example.data.model.AppSettings
 import kotlinx.coroutines.withContext
@@ -34,6 +39,8 @@ class AnimeRepository(private val context: Context) {
     private val watchProgressDao = db.watchProgressDao()
     private val downloadDao = db.downloadDao()
     private val notificationDao = db.notificationDao()
+    private val usageStatsDao = db.usageStatsDao()
+    private val usageStatsMutex = Mutex()
     private val aniListService = AniListService()
     val malSyncService = MalSyncService()
     val animeThemesService = com.example.data.network.AnimeThemesService()
@@ -55,6 +62,8 @@ class AnimeRepository(private val context: Context) {
     val allHistory: Flow<List<WatchProgress>> = watchProgressDao.getAllProgress().flowOn(Dispatchers.IO)
     val allDownloads: Flow<List<DownloadItem>> = downloadDao.getAllDownloads().flowOn(Dispatchers.IO)
     val allNotifications: Flow<List<AppNotification>> = notificationDao.getAllNotifications().flowOn(Dispatchers.IO)
+    val dailyUsageStats: Flow<List<DailyUsageStats>> = usageStatsDao.observeAllDailyUsage().flowOn(Dispatchers.IO)
+    val animeWatchStats: Flow<List<AnimeWatchStats>> = usageStatsDao.observeAllAnimeWatchStats().flowOn(Dispatchers.IO)
     val settings: Flow<AppSettings> = settingsManager.settings
 
     fun getAnimeById(id: String): Flow<Anime?> = animeDao.getAnimeById(id).flowOn(Dispatchers.IO)
@@ -456,6 +465,8 @@ class AnimeRepository(private val context: Context) {
         dismissedContinueWatchingAnimeIds.remove(anime.id)
         dismissedProgressIds.remove(epKey)
 
+        val previousProgress = watchProgressDao.getProgressById(epKey)
+
         val progress = WatchProgress(
             id = epKey,
             animeId = anime.id,
@@ -470,6 +481,10 @@ class AnimeRepository(private val context: Context) {
             lastWatchedAt = now
         )
         watchProgressDao.saveProgress(progress)
+
+        if (completed && previousProgress?.completed != true) {
+            recordEpisodeCompleted(anime)
+        }
 
         // Ensure anime is saved in local DB without clobbering watchlist/favorite flags
         try {
@@ -595,6 +610,148 @@ class AnimeRepository(private val context: Context) {
         watchProgressDao.clearAllHistory()
     }
 
+    suspend fun recordAppUsage(
+        deltaSec: Long,
+        incrementSession: Boolean = false,
+        timestampMs: Long = System.currentTimeMillis()
+    ) = withContext(Dispatchers.IO) {
+        if (settingsManager.getSettings().incognitoMode) return@withContext
+        val clamped = if (deltaSec > 0L) deltaSec.coerceIn(1L, 60L) else 0L
+        if (clamped == 0L && !incrementSession) return@withContext
+
+        usageStatsMutex.withLock {
+            val dateKey = UsageStatsCalculator.localDateKey(timestampMs)
+            val existing = usageStatsDao.getDailyUsageByDate(dateKey)
+            val updated = if (existing != null) {
+                existing.copy(
+                    appTimeSec = existing.appTimeSec + clamped,
+                    sessionsCount = existing.sessionsCount + if (incrementSession) 1 else 0,
+                    updatedAt = timestampMs
+                )
+            } else {
+                DailyUsageStats(
+                    dateKey = dateKey,
+                    appTimeSec = clamped,
+                    watchTimeSec = 0L,
+                    episodesCompleted = 0,
+                    sessionsCount = if (incrementSession) 1 else 0,
+                    updatedAt = timestampMs
+                )
+            }
+            usageStatsDao.upsertDailyUsage(updated)
+        }
+    }
+
+    suspend fun recordWatchTime(
+        anime: Anime,
+        deltaSec: Long,
+        timestampMs: Long = System.currentTimeMillis()
+    ) = withContext(Dispatchers.IO) {
+        if (settingsManager.getSettings().incognitoMode) return@withContext
+        if (deltaSec <= 0L) return@withContext
+        val clamped = deltaSec.coerceIn(1L, 60L)
+
+        usageStatsMutex.withLock {
+            val dateKey = UsageStatsCalculator.localDateKey(timestampMs)
+            val existingDaily = usageStatsDao.getDailyUsageByDate(dateKey)
+            val updatedDaily = if (existingDaily != null) {
+                existingDaily.copy(
+                    watchTimeSec = existingDaily.watchTimeSec + clamped,
+                    updatedAt = timestampMs
+                )
+            } else {
+                DailyUsageStats(
+                    dateKey = dateKey,
+                    appTimeSec = 0L,
+                    watchTimeSec = clamped,
+                    episodesCompleted = 0,
+                    sessionsCount = 0,
+                    updatedAt = timestampMs
+                )
+            }
+            usageStatsDao.upsertDailyUsage(updatedDaily)
+
+            val existingAnime = usageStatsDao.getAnimeWatchStatsById(anime.id)
+            val updatedAnime = if (existingAnime != null) {
+                existingAnime.copy(
+                    animeTitle = anime.title.ifBlank { existingAnime.animeTitle },
+                    coverImage = anime.coverImage.ifBlank { existingAnime.coverImage },
+                    genres = anime.genres.ifBlank { existingAnime.genres },
+                    watchTimeSec = existingAnime.watchTimeSec + clamped,
+                    lastWatchedAt = timestampMs
+                )
+            } else {
+                AnimeWatchStats(
+                    animeId = anime.id,
+                    animeTitle = anime.title,
+                    coverImage = anime.coverImage,
+                    genres = anime.genres,
+                    watchTimeSec = clamped,
+                    episodesWatchedCount = 0,
+                    lastWatchedAt = timestampMs
+                )
+            }
+            usageStatsDao.upsertAnimeWatchStats(updatedAnime)
+        }
+    }
+
+    suspend fun recordEpisodeCompleted(
+        anime: Anime,
+        timestampMs: Long = System.currentTimeMillis()
+    ) = withContext(Dispatchers.IO) {
+        if (settingsManager.getSettings().incognitoMode) return@withContext
+
+        usageStatsMutex.withLock {
+            val dateKey = UsageStatsCalculator.localDateKey(timestampMs)
+            val existingDaily = usageStatsDao.getDailyUsageByDate(dateKey)
+            val updatedDaily = if (existingDaily != null) {
+                existingDaily.copy(
+                    episodesCompleted = existingDaily.episodesCompleted + 1,
+                    updatedAt = timestampMs
+                )
+            } else {
+                DailyUsageStats(
+                    dateKey = dateKey,
+                    appTimeSec = 0L,
+                    watchTimeSec = 0L,
+                    episodesCompleted = 1,
+                    sessionsCount = 0,
+                    updatedAt = timestampMs
+                )
+            }
+            usageStatsDao.upsertDailyUsage(updatedDaily)
+
+            val existingAnime = usageStatsDao.getAnimeWatchStatsById(anime.id)
+            val updatedAnime = if (existingAnime != null) {
+                existingAnime.copy(
+                    animeTitle = anime.title.ifBlank { existingAnime.animeTitle },
+                    coverImage = anime.coverImage.ifBlank { existingAnime.coverImage },
+                    genres = anime.genres.ifBlank { existingAnime.genres },
+                    episodesWatchedCount = existingAnime.episodesWatchedCount + 1,
+                    lastWatchedAt = timestampMs
+                )
+            } else {
+                AnimeWatchStats(
+                    animeId = anime.id,
+                    animeTitle = anime.title,
+                    coverImage = anime.coverImage,
+                    genres = anime.genres,
+                    watchTimeSec = 0L,
+                    episodesWatchedCount = 1,
+                    lastWatchedAt = timestampMs
+                )
+            }
+            usageStatsDao.upsertAnimeWatchStats(updatedAnime)
+        }
+    }
+
+    suspend fun clearUsageStats() = withContext(Dispatchers.IO) {
+        usageStatsMutex.withLock {
+            usageStatsDao.clearDailyUsage()
+            usageStatsDao.clearAnimeWatchStats()
+        }
+    }
+
     /**
      * Starts an episode download.
      *
@@ -714,6 +871,8 @@ class AnimeRepository(private val context: Context) {
     suspend fun exportBackupJson(): String = withContext(Dispatchers.IO) {
         val animeList = animeDao.getAllAnime().first()
         val progressList = watchProgressDao.getAllProgress().first()
+        val dailyStatsList = usageStatsDao.getAllDailyUsageOnce()
+        val animeStatsList = usageStatsDao.getAllAnimeWatchStatsOnce()
 
         val root = JSONObject()
         root.put("version", 1)
@@ -781,13 +940,45 @@ class AnimeRepository(private val context: Context) {
         sObj.put("incognitoMode", s.incognitoMode)
         root.put("settings", sObj)
 
+        val usageStatsObj = JSONObject()
+        usageStatsObj.put("schemaVersion", 1)
+        val dailyArray = JSONArray()
+        dailyStatsList.forEach { d ->
+            val obj = JSONObject()
+            obj.put("dateKey", d.dateKey)
+            obj.put("appTimeSec", d.appTimeSec)
+            obj.put("watchTimeSec", d.watchTimeSec)
+            obj.put("episodesCompleted", d.episodesCompleted)
+            obj.put("sessionsCount", d.sessionsCount)
+            obj.put("updatedAt", d.updatedAt)
+            dailyArray.put(obj)
+        }
+        usageStatsObj.put("dailyUsage", dailyArray)
+
+        val animeStatsArray = JSONArray()
+        animeStatsList.forEach { a ->
+            val obj = JSONObject()
+            obj.put("animeId", a.animeId)
+            obj.put("animeTitle", a.animeTitle)
+            obj.put("coverImage", a.coverImage)
+            obj.put("genres", a.genres)
+            obj.put("watchTimeSec", a.watchTimeSec)
+            obj.put("episodesWatchedCount", a.episodesWatchedCount)
+            obj.put("lastWatchedAt", a.lastWatchedAt)
+            animeStatsArray.put(obj)
+        }
+        usageStatsObj.put("animeStats", animeStatsArray)
+        root.put("usageStats", usageStatsObj)
+
         root.toString(2)
     }
 
     suspend fun importBackupJson(jsonString: String, mode: String = "MERGE"): String = withContext(Dispatchers.IO) {
         try {
             val root = JSONObject(jsonString)
-            val progressArray = root.optJSONArray("watchProgress") ?: JSONArray()
+            val progressArray = root.optJSONArray("watchProgress")
+                ?: root.optJSONArray("progressState")
+                ?: JSONArray()
             val animeArray = root.optJSONArray("animeState") ?: JSONArray()
 
             val fullSettingsJson = root.optString("settingsJson", "")
@@ -902,6 +1093,100 @@ class AnimeRepository(private val context: Context) {
                 }
             }
 
+            val usageStatsObj = root.optJSONObject("usageStats")
+            if (mode == "REPLACE") {
+                usageStatsMutex.withLock {
+                    usageStatsDao.clearDailyUsage()
+                    usageStatsDao.clearAnimeWatchStats()
+                }
+            }
+            if (usageStatsObj != null) {
+                usageStatsMutex.withLock {
+                    val dailyArray = usageStatsObj.optJSONArray("dailyUsage")
+                    if (dailyArray != null) {
+                        val toUpsert = mutableListOf<DailyUsageStats>()
+                        for (i in 0 until dailyArray.length()) {
+                            val obj = dailyArray.optJSONObject(i) ?: continue
+                            val dateKey = obj.optString("dateKey", "")
+                            if (!UsageStatsCalculator.isValidDateKey(dateKey)) continue
+                            val inApp = obj.optLong("appTimeSec", 0L).coerceAtLeast(0L)
+                            val inWatch = obj.optLong("watchTimeSec", 0L).coerceAtLeast(0L)
+                            val inEps = obj.optInt("episodesCompleted", 0).coerceAtLeast(0)
+                            val inSessions = obj.optInt("sessionsCount", 0).coerceAtLeast(0)
+                            val inUpdated = obj.optLong("updatedAt", System.currentTimeMillis())
+
+                            val existing = if (mode == "REPLACE") null else usageStatsDao.getDailyUsageByDate(dateKey)
+                            toUpsert.add(
+                                if (existing != null) {
+                                    existing.copy(
+                                        appTimeSec = maxOf(existing.appTimeSec, inApp),
+                                        watchTimeSec = maxOf(existing.watchTimeSec, inWatch),
+                                        episodesCompleted = maxOf(existing.episodesCompleted, inEps),
+                                        sessionsCount = maxOf(existing.sessionsCount, inSessions),
+                                        updatedAt = maxOf(existing.updatedAt, inUpdated)
+                                    )
+                                } else {
+                                    DailyUsageStats(
+                                        dateKey = dateKey,
+                                        appTimeSec = inApp,
+                                        watchTimeSec = inWatch,
+                                        episodesCompleted = inEps,
+                                        sessionsCount = inSessions,
+                                        updatedAt = inUpdated
+                                    )
+                                }
+                            )
+                        }
+                        if (toUpsert.isNotEmpty()) {
+                            usageStatsDao.upsertAllDailyUsage(toUpsert)
+                        }
+                    }
+
+                    val animeStatsArray = usageStatsObj.optJSONArray("animeStats")
+                    if (animeStatsArray != null) {
+                        val toUpsert = mutableListOf<AnimeWatchStats>()
+                        for (i in 0 until animeStatsArray.length()) {
+                            val obj = animeStatsArray.optJSONObject(i) ?: continue
+                            val animeId = obj.optString("animeId", "")
+                            if (animeId.isBlank()) continue
+                            val inTitle = obj.optString("animeTitle", "")
+                            val inCover = obj.optString("coverImage", "")
+                            val inGenres = obj.optString("genres", "")
+                            val inWatch = obj.optLong("watchTimeSec", 0L).coerceAtLeast(0L)
+                            val inEps = obj.optInt("episodesWatchedCount", 0).coerceAtLeast(0)
+                            val inLast = obj.optLong("lastWatchedAt", System.currentTimeMillis())
+
+                            val existing = if (mode == "REPLACE") null else usageStatsDao.getAnimeWatchStatsById(animeId)
+                            toUpsert.add(
+                                if (existing != null) {
+                                    existing.copy(
+                                        animeTitle = existing.animeTitle.ifBlank { inTitle },
+                                        coverImage = existing.coverImage.ifBlank { inCover },
+                                        genres = existing.genres.ifBlank { inGenres },
+                                        watchTimeSec = maxOf(existing.watchTimeSec, inWatch),
+                                        episodesWatchedCount = maxOf(existing.episodesWatchedCount, inEps),
+                                        lastWatchedAt = maxOf(existing.lastWatchedAt, inLast)
+                                    )
+                                } else {
+                                    AnimeWatchStats(
+                                        animeId = animeId,
+                                        animeTitle = inTitle,
+                                        coverImage = inCover,
+                                        genres = inGenres,
+                                        watchTimeSec = inWatch,
+                                        episodesWatchedCount = inEps,
+                                        lastWatchedAt = inLast
+                                    )
+                                }
+                            )
+                        }
+                        if (toUpsert.isNotEmpty()) {
+                            usageStatsDao.upsertAllAnimeWatchStats(toUpsert)
+                        }
+                    }
+                }
+            }
+
             "Successfully processed $importedCount records (Merged: $mergedCount)"
         } catch (e: Exception) {
             "Import failed: ${e.localizedMessage ?: "Invalid JSON format"}"
@@ -917,6 +1202,7 @@ class AnimeRepository(private val context: Context) {
         watchProgressDao.clearAllHistory()
         downloadDao.clearDownloads()
         notificationDao.clearAll()
+        clearUsageStats()
         val all = animeDao.getAllAnime().first()
         all.forEach {
             animeDao.updateFavorite(it.id, false)

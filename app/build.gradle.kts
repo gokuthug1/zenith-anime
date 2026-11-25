@@ -16,8 +16,8 @@ android {
     applicationId = "com.aistudio.zenithanime.vxkt"
     minSdk = 24
     targetSdk = 36
-    versionCode = 7
-    versionName = "1.8.0"
+    versionCode = 8
+    versionName = "1.8.1"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

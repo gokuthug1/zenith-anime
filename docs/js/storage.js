@@ -13,8 +13,40 @@
     LIBRARY: 'zenith_library',
     PROGRESS: 'zenith_watch_progress',
     RECENT_SEARCHES: 'zenith_recent_searches',
-    NOTIFICATIONS: 'zenith_notifications'
+    NOTIFICATIONS: 'zenith_notifications',
+    DAILY_USAGE: 'zenith_daily_usage',
+    ANIME_STATS: 'zenith_anime_watch_stats'
   };
+
+  const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  function pad2(n) {
+    return String(n).padStart(2, '0');
+  }
+
+  function formatDateKeyFromDate(d) {
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  }
+
+  function parseDateKeyLocal(dateKey) {
+    if (!DATE_KEY_RE.test(String(dateKey || ''))) return null;
+    const [y, m, d] = dateKey.split('-').map(Number);
+    const dt = new Date(y, m - 1, d, 12, 0, 0, 0);
+    if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d) return null;
+    return dt;
+  }
+
+  function shiftDateKey(dateKey, deltaDays) {
+    const dt = parseDateKeyLocal(dateKey) || new Date();
+    dt.setDate(dt.getDate() + deltaDays);
+    return formatDateKeyFromDate(dt);
+  }
+
+  function shortDayLabel(dateKey) {
+    const dt = parseDateKeyLocal(dateKey);
+    if (!dt) return String(dateKey).slice(-5);
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][dt.getDay()];
+  }
 
   const DEFAULT_SETTINGS = {
     accent: 'emerald',
@@ -373,8 +405,18 @@
           title: data.animeTitle,
           coverImage: data.coverImage,
           bannerImage: data.bannerImage,
+          genres: data.genres || libEntry?.genres || '',
           availableEpisodes: availableEps
         }, 'WATCHING');
+      }
+
+      if (isCompleted && !existing.completed) {
+        this.recordEpisodeCompleted({
+          id: data.animeId,
+          title: data.animeTitle || existing.animeTitle || 'Anime',
+          coverImage: data.coverImage || existing.coverImage || '',
+          genres: data.genres || libEntry?.genres || ''
+        }, now);
       }
 
       return all[key];
@@ -459,11 +501,274 @@
       return progressList.slice(0, limit);
     },
 
+    // ---- WATCH TIME & APP USAGE STATISTICS ----
+    getLocalDateKey(ts = Date.now()) {
+      return formatDateKeyFromDate(new Date(ts));
+    },
+
+    formatDuration(totalSec) {
+      const safe = Math.max(0, Math.floor(Number(totalSec) || 0));
+      if (safe < 60) return `${safe}s`;
+      const totalMinutes = Math.floor(safe / 60);
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      if (hours >= 24) {
+        const days = Math.floor(hours / 24);
+        const remHours = hours % 24;
+        return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+      }
+      if (hours > 0) {
+        return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+      }
+      return `${minutes}m`;
+    },
+
+    getDailyUsage() {
+      return safeGet(KEYS.DAILY_USAGE, {});
+    },
+
+    getAnimeWatchStats() {
+      return safeGet(KEYS.ANIME_STATS, {});
+    },
+
+    recordAppUsage(deltaSec, options = {}) {
+      const ts = Number(options.timestampMs) || Date.now();
+      const incrementSession = Boolean(options.incrementSession);
+      const raw = Number(deltaSec) || 0;
+      const clamped = raw > 0 ? Math.min(60, Math.max(1, Math.floor(raw))) : 0;
+      if (clamped === 0 && !incrementSession) return null;
+
+      const daily = this.getDailyUsage();
+      const dateKey = this.getLocalDateKey(ts);
+      const existing = daily[dateKey] || {
+        dateKey,
+        appTimeSec: 0,
+        watchTimeSec: 0,
+        episodesCompleted: 0,
+        sessionsCount: 0,
+        updatedAt: ts
+      };
+
+      daily[dateKey] = {
+        dateKey,
+        appTimeSec: Math.max(0, Number(existing.appTimeSec) || 0) + clamped,
+        watchTimeSec: Math.max(0, Number(existing.watchTimeSec) || 0),
+        episodesCompleted: Math.max(0, Number(existing.episodesCompleted) || 0),
+        sessionsCount: Math.max(0, Number(existing.sessionsCount) || 0) + (incrementSession ? 1 : 0),
+        updatedAt: ts
+      };
+      safeSet(KEYS.DAILY_USAGE, daily);
+      return daily[dateKey];
+    },
+
+    recordWatchTime(anime, deltaSec, timestampMs = Date.now()) {
+      if (!anime || !anime.id) return null;
+      const raw = Number(deltaSec) || 0;
+      if (raw <= 0) return null;
+      const clamped = Math.min(60, Math.max(1, Math.floor(raw)));
+      const ts = Number(timestampMs) || Date.now();
+
+      const daily = this.getDailyUsage();
+      const dateKey = this.getLocalDateKey(ts);
+      const existingDaily = daily[dateKey] || {
+        dateKey,
+        appTimeSec: 0,
+        watchTimeSec: 0,
+        episodesCompleted: 0,
+        sessionsCount: 0,
+        updatedAt: ts
+      };
+      daily[dateKey] = {
+        dateKey,
+        appTimeSec: Math.max(0, Number(existingDaily.appTimeSec) || 0),
+        watchTimeSec: Math.max(0, Number(existingDaily.watchTimeSec) || 0) + clamped,
+        episodesCompleted: Math.max(0, Number(existingDaily.episodesCompleted) || 0),
+        sessionsCount: Math.max(0, Number(existingDaily.sessionsCount) || 0),
+        updatedAt: ts
+      };
+      safeSet(KEYS.DAILY_USAGE, daily);
+
+      const animeId = String(anime.id);
+      const stats = this.getAnimeWatchStats();
+      const existingAnime = stats[animeId] || {};
+      const libEntry = this.getAnimeEntry(animeId);
+      const resolvedTitle = this.getDisplayTitle(anime) !== 'Anime'
+        ? this.getDisplayTitle(anime)
+        : (anime.title || existingAnime.animeTitle || libEntry?.title || `Anime #${animeId}`);
+
+      stats[animeId] = {
+        animeId,
+        animeTitle: resolvedTitle || existingAnime.animeTitle || '',
+        coverImage: anime.coverImage || existingAnime.coverImage || libEntry?.coverImage || '',
+        genres: anime.genres || existingAnime.genres || libEntry?.genres || '',
+        watchTimeSec: Math.max(0, Number(existingAnime.watchTimeSec) || 0) + clamped,
+        episodesWatchedCount: Math.max(0, Number(existingAnime.episodesWatchedCount) || 0),
+        lastWatchedAt: ts
+      };
+      safeSet(KEYS.ANIME_STATS, stats);
+      return stats[animeId];
+    },
+
+    recordEpisodeCompleted(anime, timestampMs = Date.now()) {
+      if (!anime || !anime.id) return null;
+      const ts = Number(timestampMs) || Date.now();
+
+      const daily = this.getDailyUsage();
+      const dateKey = this.getLocalDateKey(ts);
+      const existingDaily = daily[dateKey] || {
+        dateKey,
+        appTimeSec: 0,
+        watchTimeSec: 0,
+        episodesCompleted: 0,
+        sessionsCount: 0,
+        updatedAt: ts
+      };
+      daily[dateKey] = {
+        dateKey,
+        appTimeSec: Math.max(0, Number(existingDaily.appTimeSec) || 0),
+        watchTimeSec: Math.max(0, Number(existingDaily.watchTimeSec) || 0),
+        episodesCompleted: Math.max(0, Number(existingDaily.episodesCompleted) || 0) + 1,
+        sessionsCount: Math.max(0, Number(existingDaily.sessionsCount) || 0),
+        updatedAt: ts
+      };
+      safeSet(KEYS.DAILY_USAGE, daily);
+
+      const animeId = String(anime.id);
+      const stats = this.getAnimeWatchStats();
+      const existingAnime = stats[animeId] || {};
+      const libEntry = this.getAnimeEntry(animeId);
+
+      stats[animeId] = {
+        animeId,
+        animeTitle: anime.title || existingAnime.animeTitle || libEntry?.title || `Anime #${animeId}`,
+        coverImage: anime.coverImage || existingAnime.coverImage || libEntry?.coverImage || '',
+        genres: anime.genres || existingAnime.genres || libEntry?.genres || '',
+        watchTimeSec: Math.max(0, Number(existingAnime.watchTimeSec) || 0),
+        episodesWatchedCount: Math.max(0, Number(existingAnime.episodesWatchedCount) || 0) + 1,
+        lastWatchedAt: ts
+      };
+      safeSet(KEYS.ANIME_STATS, stats);
+      return stats[animeId];
+    },
+
+    getUsageStatsSummary(range = '7d', todayKey = this.getLocalDateKey()) {
+      const dailyMap = this.getDailyUsage();
+      const animeMap = this.getAnimeWatchStats();
+
+      const daysCount = range === 'today' ? 1 : (range === '7d' ? 7 : (range === '30d' ? 30 : null));
+      const cutoffKey = daysCount ? shiftDateKey(todayKey, -(daysCount - 1)) : null;
+
+      const validDaily = Object.values(dailyMap).filter(d => d && DATE_KEY_RE.test(d.dateKey));
+      const filteredDaily = validDaily.filter(d => !cutoffKey || (d.dateKey >= cutoffKey && d.dateKey <= todayKey));
+
+      const totalWatchTimeSec = filteredDaily.reduce((acc, d) => acc + Math.max(0, Number(d.watchTimeSec) || 0), 0);
+      const totalAppTimeSec = filteredDaily.reduce((acc, d) => acc + Math.max(0, Number(d.appTimeSec) || 0), 0);
+      const episodesCompleted = filteredDaily.reduce((acc, d) => acc + Math.max(0, Number(d.episodesCompleted) || 0), 0);
+      const sessionsCount = filteredDaily.reduce((acc, d) => acc + Math.max(0, Number(d.sessionsCount) || 0), 0);
+      const activeDays = filteredDaily.filter(d => (d.watchTimeSec || 0) > 0 || (d.appTimeSec || 0) > 0 || (d.episodesCompleted || 0) > 0).length;
+
+      const divisor = daysCount || Math.max(1, activeDays);
+      const avgDailyWatchTimeSec = Math.floor(totalWatchTimeSec / divisor);
+
+      const activeKeySet = new Set(
+        validDaily
+          .filter(d => (d.watchTimeSec || 0) > 0 || (d.appTimeSec || 0) > 0 || (d.episodesCompleted || 0) > 0)
+          .map(d => d.dateKey)
+      );
+      let currentStreakDays = 0;
+      let cursor = activeKeySet.has(todayKey) ? todayKey : shiftDateKey(todayKey, -1);
+      while (activeKeySet.has(cursor)) {
+        currentStreakDays++;
+        cursor = shiftDateKey(cursor, -1);
+      }
+
+      const sortedActiveKeys = Array.from(activeKeySet).sort();
+      let longestStreakDays = 0;
+      let run = 0;
+      let prevKey = null;
+      sortedActiveKeys.forEach(k => {
+        if (prevKey && shiftDateKey(prevKey, 1) === k) {
+          run++;
+        } else {
+          run = 1;
+        }
+        if (run > longestStreakDays) longestStreakDays = run;
+        prevKey = k;
+      });
+
+      const chartWindowDays = (range === '30d' || range === 'all') ? 14 : 7;
+      const chartDays = [];
+      for (let offset = -(chartWindowDays - 1); offset <= 0; offset++) {
+        const key = shiftDateKey(todayKey, offset);
+        const row = dailyMap[key];
+        chartDays.push({
+          dateKey: key,
+          shortLabel: offset === 0 ? 'Today' : shortDayLabel(key),
+          watchTimeSec: Math.max(0, Number(row?.watchTimeSec) || 0),
+          appTimeSec: Math.max(0, Number(row?.appTimeSec) || 0),
+          episodesCompleted: Math.max(0, Number(row?.episodesCompleted) || 0)
+        });
+      }
+
+      const topAnime = Object.values(animeMap)
+        .filter(a => a && ((a.watchTimeSec || 0) > 0 || (a.episodesWatchedCount || 0) > 0))
+        .sort((a, b) =>
+          (b.watchTimeSec || 0) - (a.watchTimeSec || 0) ||
+          (b.episodesWatchedCount || 0) - (a.episodesWatchedCount || 0) ||
+          (b.lastWatchedAt || 0) - (a.lastWatchedAt || 0)
+        )
+        .slice(0, 8);
+
+      const genreTotals = {};
+      Object.values(animeMap).forEach(stat => {
+        if (!stat || ((stat.watchTimeSec || 0) <= 0 && (stat.episodesWatchedCount || 0) <= 0)) return;
+        const parsed = String(stat.genres || '')
+          .split(',')
+          .map(g => g.trim())
+          .filter(g => g && g.toLowerCase() !== 'anime');
+        const unique = Array.from(new Set(parsed));
+        unique.forEach(g => {
+          if (!genreTotals[g]) {
+            genreTotals[g] = { genre: g, watchTimeSec: 0, animeIds: new Set() };
+          }
+          genreTotals[g].watchTimeSec += Math.max(0, Number(stat.watchTimeSec) || 0);
+          genreTotals[g].animeIds.add(String(stat.animeId));
+        });
+      });
+
+      const topGenres = Object.values(genreTotals)
+        .map(g => ({ genre: g.genre, watchTimeSec: g.watchTimeSec, animeCount: g.animeIds.size }))
+        .sort((a, b) => b.watchTimeSec - a.watchTimeSec || b.animeCount - a.animeCount)
+        .slice(0, 6);
+
+      return {
+        range,
+        totalWatchTimeSec,
+        totalAppTimeSec,
+        episodesCompleted,
+        sessionsCount,
+        activeDays,
+        avgDailyWatchTimeSec,
+        currentStreakDays,
+        longestStreakDays,
+        chartDays,
+        topAnime,
+        topGenres
+      };
+    },
+
+    clearUsageStats() {
+      localStorage.removeItem(KEYS.DAILY_USAGE);
+      localStorage.removeItem(KEYS.ANIME_STATS);
+    },
+
     // ---- BACKUP EXPORT & IMPORT (100% Android APK Compatible) ----
     exportBackupJson() {
       const lib = this.getLibrary();
       const progress = this.getAllProgress();
       const settings = this.getSettings();
+      const dailyUsage = this.getDailyUsage();
+      const animeStats = this.getAnimeWatchStats();
 
       const backup = {
         version: 2,
@@ -504,7 +809,27 @@
           language: p.language,
           completed: p.completed,
           lastWatchedAt: p.lastWatchedAt
-        }))
+        })),
+        usageStats: {
+          schemaVersion: 1,
+          dailyUsage: Object.values(dailyUsage).map(d => ({
+            dateKey: d.dateKey,
+            appTimeSec: Math.max(0, Number(d.appTimeSec) || 0),
+            watchTimeSec: Math.max(0, Number(d.watchTimeSec) || 0),
+            episodesCompleted: Math.max(0, Number(d.episodesCompleted) || 0),
+            sessionsCount: Math.max(0, Number(d.sessionsCount) || 0),
+            updatedAt: Number(d.updatedAt) || Date.now()
+          })),
+          animeStats: Object.values(animeStats).map(a => ({
+            animeId: String(a.animeId),
+            animeTitle: a.animeTitle || '',
+            coverImage: a.coverImage || '',
+            genres: a.genres || '',
+            watchTimeSec: Math.max(0, Number(a.watchTimeSec) || 0),
+            episodesWatchedCount: Math.max(0, Number(a.episodesWatchedCount) || 0),
+            lastWatchedAt: Number(a.lastWatchedAt) || Date.now()
+          }))
+        }
       };
 
       return JSON.stringify(backup, null, 2);
@@ -514,7 +839,7 @@
       const replaceAll = Boolean(options.replaceAll);
       try {
         const parsed = JSON.parse(jsonString);
-        if (!parsed || (parsed.app !== 'ZenithAnime' && !Array.isArray(parsed.animeState) && !Array.isArray(parsed.progressState))) {
+        if (!parsed || (parsed.app !== 'ZenithAnime' && !Array.isArray(parsed.animeState) && !Array.isArray(parsed.progressState) && !Array.isArray(parsed.watchProgress))) {
           throw new Error('Invalid Zenith Anime backup file format');
         }
 
@@ -538,8 +863,11 @@
         }
 
         const progress = replaceAll ? {} : this.getAllProgress();
-        if (Array.isArray(parsed.progressState)) {
-          parsed.progressState.forEach(p => {
+        const incomingProgress = Array.isArray(parsed.progressState)
+          ? parsed.progressState
+          : (Array.isArray(parsed.watchProgress) ? parsed.watchProgress : []);
+        if (incomingProgress.length > 0 || replaceAll) {
+          incomingProgress.forEach(p => {
             if (p && p.animeId && p.episodeNumber) {
               const key = `${p.animeId}_ep_${p.episodeNumber}`;
               const existing = progress[key];
@@ -565,6 +893,72 @@
           safeSet(KEYS.PROGRESS, progress);
         }
 
+        const incomingUsage = parsed.usageStats;
+        if (replaceAll) {
+          this.clearUsageStats();
+        }
+        if (incomingUsage && typeof incomingUsage === 'object') {
+          const daily = replaceAll ? {} : this.getDailyUsage();
+          if (Array.isArray(incomingUsage.dailyUsage)) {
+            incomingUsage.dailyUsage.forEach(d => {
+              if (!d || !DATE_KEY_RE.test(String(d.dateKey || ''))) return;
+              const dk = String(d.dateKey);
+              const inApp = Math.max(0, Number(d.appTimeSec) || 0);
+              const inWatch = Math.max(0, Number(d.watchTimeSec) || 0);
+              const inEps = Math.max(0, Number(d.episodesCompleted) || 0);
+              const inSessions = Math.max(0, Number(d.sessionsCount) || 0);
+              const inUpdated = Number(d.updatedAt) || Date.now();
+              const existing = daily[dk];
+              daily[dk] = existing ? {
+                dateKey: dk,
+                appTimeSec: Math.max(existing.appTimeSec || 0, inApp),
+                watchTimeSec: Math.max(existing.watchTimeSec || 0, inWatch),
+                episodesCompleted: Math.max(existing.episodesCompleted || 0, inEps),
+                sessionsCount: Math.max(existing.sessionsCount || 0, inSessions),
+                updatedAt: Math.max(existing.updatedAt || 0, inUpdated)
+              } : {
+                dateKey: dk,
+                appTimeSec: inApp,
+                watchTimeSec: inWatch,
+                episodesCompleted: inEps,
+                sessionsCount: inSessions,
+                updatedAt: inUpdated
+              };
+            });
+            safeSet(KEYS.DAILY_USAGE, daily);
+          }
+
+          const animeStats = replaceAll ? {} : this.getAnimeWatchStats();
+          if (Array.isArray(incomingUsage.animeStats)) {
+            incomingUsage.animeStats.forEach(a => {
+              if (!a || !a.animeId) return;
+              const aid = String(a.animeId);
+              const inWatch = Math.max(0, Number(a.watchTimeSec) || 0);
+              const inEps = Math.max(0, Number(a.episodesWatchedCount) || 0);
+              const inLast = Number(a.lastWatchedAt) || Date.now();
+              const existing = animeStats[aid];
+              animeStats[aid] = existing ? {
+                animeId: aid,
+                animeTitle: existing.animeTitle || a.animeTitle || '',
+                coverImage: existing.coverImage || a.coverImage || '',
+                genres: existing.genres || a.genres || '',
+                watchTimeSec: Math.max(existing.watchTimeSec || 0, inWatch),
+                episodesWatchedCount: Math.max(existing.episodesWatchedCount || 0, inEps),
+                lastWatchedAt: Math.max(existing.lastWatchedAt || 0, inLast)
+              } : {
+                animeId: aid,
+                animeTitle: a.animeTitle || '',
+                coverImage: a.coverImage || '',
+                genres: a.genres || '',
+                watchTimeSec: inWatch,
+                episodesWatchedCount: inEps,
+                lastWatchedAt: inLast
+              };
+            });
+            safeSet(KEYS.ANIME_STATS, animeStats);
+          }
+        }
+
         if (parsed.settings && typeof parsed.settings === 'object') {
           this.updateSettings(parsed.settings);
         }
@@ -572,7 +966,7 @@
         return {
           success: true,
           animeCount: (parsed.animeState || []).length,
-          progressCount: (parsed.progressState || []).length
+          progressCount: incomingProgress.length
         };
       } catch (err) {
         return { success: false, error: err.message };
@@ -583,6 +977,8 @@
       localStorage.removeItem(KEYS.LIBRARY);
       localStorage.removeItem(KEYS.PROGRESS);
       localStorage.removeItem(KEYS.RECENT_SEARCHES);
+      localStorage.removeItem(KEYS.DAILY_USAGE);
+      localStorage.removeItem(KEYS.ANIME_STATS);
     }
   };
 

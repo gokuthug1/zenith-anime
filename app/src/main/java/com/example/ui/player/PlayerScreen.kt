@@ -799,6 +799,40 @@ fun PlayerScreen(
         )
     }
 
+    // Wall-clock active watch-time tracker (counts real playback seconds; never inflated by scrubbing)
+    LaunchedEffect(isPlaying, isReady, isBuffering, anime?.id, currentEpNumber) {
+        val loaded = anime ?: return@LaunchedEffect
+        if (!isPlaying || !isReady || isBuffering) return@LaunchedEffect
+        val displayAnime = loaded.copy(title = loaded.displayTitle(savedSettings.titleLanguagePreference))
+        var lastTickElapsedMs = android.os.SystemClock.elapsedRealtime()
+        var bufferedSec = 0L
+        try {
+            while (true) {
+                delay(1000L)
+                val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
+                val delta = ((nowElapsedMs - lastTickElapsedMs) / 1000L).coerceIn(0L, 15L)
+                lastTickElapsedMs = nowElapsedMs
+                if (delta > 0L) {
+                    bufferedSec += delta
+                    if (bufferedSec >= 10L) {
+                        val toFlush = bufferedSec
+                        bufferedSec = 0L
+                        repository.recordWatchTime(displayAnime, toFlush)
+                    }
+                }
+            }
+        } finally {
+            val nowElapsedMs = android.os.SystemClock.elapsedRealtime()
+            val trailing = ((nowElapsedMs - lastTickElapsedMs) / 1000L).coerceIn(0L, 15L)
+            val totalFlush = bufferedSec + trailing
+            if (totalFlush > 0L) {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                    repository.recordWatchTime(displayAnime, totalFlush)
+                }
+            }
+        }
+    }
+
     // Auto-next episode countdown banner
     LaunchedEffect(
         currentTimeSec,

@@ -228,5 +228,7 @@ data class BackupData(
     val anime: List<Anime> = emptyList(),
     val watchProgress: List<WatchProgress> = emptyList(),
     val downloads: List<DownloadItem> = emptyList(),
-    val settings: AppSettings = AppSettings()
+    val settings: AppSettings = AppSettings(),
+    val dailyUsageStats: List<DailyUsageStats> = emptyList(),
+    val animeWatchStats: List<AnimeWatchStats> = emptyList()
 )

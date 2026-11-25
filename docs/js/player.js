@@ -23,6 +23,7 @@
     isTheaterMode: false,
     timer: null,
     playbackSeconds: 0,
+    activeWatchBufferSec: 0,
     estimatedDuration: 1440, // Standard anime broadcast: ~24 minutes in seconds
 
     init() {
@@ -471,6 +472,7 @@
 
     startProgressTracking() {
       this.stopProgressTracking();
+      this.activeWatchBufferSec = 0;
       this.saveCurrentProgress();
 
       this.timer = setInterval(() => {
@@ -480,10 +482,26 @@
           this.updateProgressUI();
         }
 
+        this.activeWatchBufferSec += 1;
+        if (this.activeWatchBufferSec >= 10) {
+          this.flushActiveWatchTime();
+        }
+
         if (this.playbackSeconds % 5 === 0) {
           this.saveCurrentProgress();
         }
       }, 1000);
+    },
+
+    flushActiveWatchTime() {
+      if (!this.currentAnime || this.activeWatchBufferSec <= 0) return;
+      if (this.currentAnime.isUpcoming || (typeof this.currentAnime.availableEpisodes === 'number' && this.currentAnime.availableEpisodes <= 0)) {
+        this.activeWatchBufferSec = 0;
+        return;
+      }
+      const toFlush = Math.min(60, this.activeWatchBufferSec);
+      this.activeWatchBufferSec = 0;
+      window.ZenithStorage?.recordWatchTime?.(this.currentAnime, toFlush);
     },
 
     stopProgressTracking() {
@@ -491,6 +509,7 @@
         clearInterval(this.timer);
         this.timer = null;
       }
+      this.flushActiveWatchTime();
       this.saveCurrentProgress();
     },
 
@@ -513,6 +532,7 @@
         episodeTitle: epMeta?.title || existing?.episodeTitle || `Episode ${this.currentEpisode}`,
         coverImage: this.currentAnime.coverImage,
         bannerImage: this.currentAnime.bannerImage,
+        genres: this.currentAnime.genres || '',
         currentTimeSec: clampedSec,
         durationSec: duration,
         completed: isCompleted,

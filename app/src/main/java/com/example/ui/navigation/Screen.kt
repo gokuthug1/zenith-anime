@@ -16,6 +16,7 @@ sealed class Screen(val route: String) {
             "player/$animeId/$episodeNumber/$language"
     }
     object MalSync : Screen("mal_sync")
+    object UsageStats : Screen("usage_stats")
     object PlayerSettings : Screen("player_settings")
     object SettingsHub : Screen("settings_hub")
     object SubtitleSettings : Screen("subtitle_settings")

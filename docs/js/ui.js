@@ -2198,6 +2198,23 @@
             <h1 class="section-heading">Settings &amp; Customization</h1>
           </div>
 
+          <!-- Watch Time & Usage Statistics -->
+          <section class="settings-card usage-stats-card" id="usage-stats-card">
+            <div class="usage-stats-header">
+              <div>
+                <h3>Watch Time &amp; Usage Statistics</h3>
+                <p class="settings-desc">Local-first playback time, active browser usage, daily streak, and top series.</p>
+              </div>
+              <div class="segmented-options" id="usage-range-selector">
+                <button type="button" class="seg-btn" data-usage-range="today">Today</button>
+                <button type="button" class="seg-btn active" data-usage-range="7d">7 Days</button>
+                <button type="button" class="seg-btn" data-usage-range="30d">30 Days</button>
+                <button type="button" class="seg-btn" data-usage-range="all">All Time</button>
+              </div>
+            </div>
+            <div id="usage-stats-body"></div>
+          </section>
+
           <div class="settings-grid">
             <!-- Appearance & Theme Accent -->
             <section class="settings-card">
@@ -2366,7 +2383,7 @@
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                     <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/>
                   </svg>
-                  <span>Download APK (v1.8.0)</span>
+                  <span>Download APK (v1.8.1)</span>
                 </a>
                 <a href="landing.html" class="btn btn-secondary btn-sm">View Showcase Page</a>
               </div>
@@ -2375,10 +2392,141 @@
         </div>
       `;
 
+      this.renderUsageStatsBody('7d');
       this.bindSettingsEvents(container);
     },
 
+    renderUsageStatsBody(range = '7d') {
+      const bodyEl = document.getElementById('usage-stats-body');
+      if (!bodyEl || !window.ZenithStorage?.getUsageStatsSummary) return;
+
+      const summary = window.ZenithStorage.getUsageStatsSummary(range);
+      const fmt = (sec) => window.ZenithStorage.formatDuration(sec);
+      const esc = (s) => String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
+      const maxChartSec = Math.max(
+        60,
+        ...summary.chartDays.map(d => Math.max(d.watchTimeSec || 0, d.appTimeSec || 0))
+      );
+      const maxAnimeSec = Math.max(1, ...summary.topAnime.map(a => a.watchTimeSec || 0));
+
+      const chartHtml = summary.chartDays.map(d => {
+        const wPct = d.watchTimeSec > 0 ? Math.max(6, Math.round((d.watchTimeSec / maxChartSec) * 100)) : 2;
+        const aPct = d.appTimeSec > 0 ? Math.max(6, Math.round((d.appTimeSec / maxChartSec) * 100)) : 2;
+        const lbl = summary.chartDays.length > 7 && d.shortLabel !== 'Today' ? d.dateKey.slice(-2) : d.shortLabel;
+        const titleTip = `${d.dateKey}: Watch ${fmt(d.watchTimeSec)} • App ${fmt(d.appTimeSec)} • ${d.episodesCompleted} eps`;
+        return `
+          <div class="usage-chart-col" title="${esc(titleTip)}">
+            <div class="usage-bar-pair">
+              <div class="usage-bar-watch" style="height:${wPct}%;"></div>
+              <div class="usage-bar-app" style="height:${aPct}%;"></div>
+            </div>
+            <span class="usage-bar-label ${d.shortLabel === 'Today' ? 'is-today' : ''}">${esc(lbl)}</span>
+          </div>
+        `;
+      }).join('');
+
+      const topAnimeHtml = summary.topAnime.length === 0
+        ? `<p class="settings-desc" style="margin:0;">Watch an episode to start tracking per-series watch time.</p>`
+        : summary.topAnime.map((a, idx) => {
+          const pct = Math.max(4, Math.round(((a.watchTimeSec || 0) / maxAnimeSec) * 100));
+          const title = a.animeTitle || `Anime #${a.animeId}`;
+          return `
+            <a href="#details/${encodeURIComponent(a.animeId)}" class="usage-top-anime-item">
+              ${a.coverImage ? `<img src="${esc(a.coverImage)}" alt="${esc(title)}" class="usage-top-anime-cover" loading="lazy">` : ''}
+              <div class="usage-top-anime-meta">
+                <div class="usage-top-anime-title">#${idx + 1} ${esc(title)}</div>
+                <div class="usage-top-anime-sub">${fmt(a.watchTimeSec)} • ${a.episodesWatchedCount || 0} ep${a.episodesWatchedCount === 1 ? '' : 's'}</div>
+                <div class="usage-progress-bg"><div class="usage-progress-fill" style="width:${pct}%"></div></div>
+              </div>
+            </a>
+          `;
+        }).join('');
+
+      const genresHtml = summary.topGenres.length > 0
+        ? `
+          <div class="usage-genre-chips">
+            ${summary.topGenres.map(g => `<span class="usage-genre-pill">${esc(g.genre)} <span>${fmt(g.watchTimeSec)}</span></span>`).join('')}
+          </div>
+        `
+        : '';
+
+      bodyEl.innerHTML = `
+        <div class="usage-kpi-grid">
+          <div class="usage-kpi-tile">
+            <div class="usage-kpi-label">Watch Time</div>
+            <div class="usage-kpi-value">${fmt(summary.totalWatchTimeSec)}</div>
+            <div class="usage-kpi-sub">Avg ${fmt(summary.avgDailyWatchTimeSec)}/day</div>
+          </div>
+          <div class="usage-kpi-tile">
+            <div class="usage-kpi-label">App Time</div>
+            <div class="usage-kpi-value">${fmt(summary.totalAppTimeSec)}</div>
+            <div class="usage-kpi-sub">${summary.sessionsCount} session${summary.sessionsCount === 1 ? '' : 's'}</div>
+          </div>
+          <div class="usage-kpi-tile">
+            <div class="usage-kpi-label">Episodes Finished</div>
+            <div class="usage-kpi-value">${summary.episodesCompleted}</div>
+            <div class="usage-kpi-sub">${summary.activeDays} active day${summary.activeDays === 1 ? '' : 's'}</div>
+          </div>
+          <div class="usage-kpi-tile">
+            <div class="usage-kpi-label">Daily Streak</div>
+            <div class="usage-kpi-value">${summary.currentStreakDays}d</div>
+            <div class="usage-kpi-sub">Best ${summary.longestStreakDays}d</div>
+          </div>
+        </div>
+
+        <div class="usage-subgrid">
+          <div class="usage-panel">
+            <div class="usage-panel-head">
+              <span class="usage-panel-title">Recent Daily Activity (${summary.chartDays.length}d)</span>
+              <div class="usage-legend">
+                <span><span class="usage-legend-dot" style="background:var(--color-accent)"></span>Watch</span>
+                <span><span class="usage-legend-dot" style="background:var(--color-border-strong)"></span>App</span>
+              </div>
+            </div>
+            <div class="usage-chart-bars">${chartHtml}</div>
+          </div>
+
+          <div class="usage-panel">
+            <div class="usage-panel-head">
+              <span class="usage-panel-title">Top Watched Anime</span>
+            </div>
+            <div class="usage-top-anime-list">${topAnimeHtml}</div>
+          </div>
+        </div>
+
+        ${genresHtml}
+
+        <div class="usage-stats-footer">
+          <span class="settings-desc" style="margin:0;">Stored locally in your browser and included in .json backups.</span>
+          <button type="button" class="btn btn-ghost btn-sm text-danger" id="btn-reset-usage-stats">Reset Usage Stats</button>
+        </div>
+      `;
+
+      document.getElementById('btn-reset-usage-stats')?.addEventListener('click', () => {
+        if (confirm('Reset your recorded watch time, daily app usage, streaks, and per-series stats?')) {
+          window.ZenithStorage.clearUsageStats();
+          const activeRange = document.querySelector('#usage-range-selector .seg-btn.active')?.getAttribute('data-usage-range') || '7d';
+          this.renderUsageStatsBody(activeRange);
+          this.showToast('Usage statistics cleared');
+        }
+      });
+    },
+
     bindSettingsEvents(container) {
+      // Usage Stats Range Selector
+      container.querySelectorAll('[data-usage-range]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          container.querySelectorAll('[data-usage-range]').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          const range = btn.getAttribute('data-usage-range') || '7d';
+          this.renderUsageStatsBody(range);
+        });
+      });
       // Accent chips
       container.querySelectorAll('.accent-chip').forEach(chip => {
         chip.addEventListener('click', () => {

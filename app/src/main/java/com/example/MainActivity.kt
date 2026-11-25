@@ -7,10 +7,21 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.WindowManager
 import android.widget.Toast
 import com.example.data.util.DeepLinkTarget
 import com.example.data.util.ShareUtils
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -55,6 +66,7 @@ import com.example.ui.navigation.Screen
 import com.example.ui.notifications.NotificationsScreen
 import com.example.ui.player.PlayerScreen
 import com.example.ui.profile.ProfileScreen
+import com.example.ui.profile.UsageStatsScreen
 import com.example.ui.schedule.ScheduleScreen
 import com.example.ui.search.SearchScreen
 import com.example.ui.settings.ConfirmationsSettingsScreen
@@ -76,6 +88,11 @@ import com.example.ui.theme.MyApplicationTheme
 
 class MainActivity : ComponentActivity() {
     private var deepLinkTargetState by mutableStateOf<DeepLinkTarget?>(null)
+    private val usageScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var usageTickerJob: Job? = null
+    private var lastUsageTickElapsedMs: Long = 0L
+    private var lastBackgroundedElapsedMs: Long = 0L
+    private var pendingSessionIncrement: Boolean = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,6 +113,51 @@ class MainActivity : ComponentActivity() {
         Coil.setImageLoader(imageLoader)
 
         val repository = AnimeRepository(applicationContext)
+
+        lifecycle.addObserver(LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> {
+                    val now = SystemClock.elapsedRealtime()
+                    pendingSessionIncrement =
+                        lastBackgroundedElapsedMs == 0L || (now - lastBackgroundedElapsedMs) > 60_000L
+                    lastUsageTickElapsedMs = now
+                    usageTickerJob?.cancel()
+                    usageTickerJob = usageScope.launch {
+                        if (pendingSessionIncrement) {
+                            pendingSessionIncrement = false
+                            repository.recordAppUsage(deltaSec = 0L, incrementSession = true)
+                        }
+                        while (isActive) {
+                            delay(15_000L)
+                            val tickNow = SystemClock.elapsedRealtime()
+                            val deltaSec = ((tickNow - lastUsageTickElapsedMs) / 1000L).coerceIn(0L, 60L)
+                            lastUsageTickElapsedMs = tickNow
+                            if (deltaSec > 0L) {
+                                repository.recordAppUsage(deltaSec = deltaSec, incrementSession = false)
+                            }
+                        }
+                    }
+                }
+                Lifecycle.Event.ON_STOP -> {
+                    usageTickerJob?.cancel()
+                    usageTickerJob = null
+                    val stopNow = SystemClock.elapsedRealtime()
+                    val deltaSec = ((stopNow - lastUsageTickElapsedMs) / 1000L).coerceIn(0L, 60L)
+                    lastUsageTickElapsedMs = stopNow
+                    lastBackgroundedElapsedMs = stopNow
+                    if (deltaSec > 0L) {
+                        usageScope.launch {
+                            repository.recordAppUsage(deltaSec = deltaSec, incrementSession = false)
+                        }
+                    }
+                }
+                Lifecycle.Event.ON_DESTROY -> {
+                    usageTickerJob?.cancel()
+                    usageScope.cancel()
+                }
+                else -> Unit
+            }
+        })
 
         setContent {
             val settings by repository.settings.collectAsState(initial = repository.settingsManager.getSettings())
@@ -329,6 +391,9 @@ fun MainApp(
                 composable(Screen.Profile.route) {
                     ProfileScreen(
                         repository = repository,
+                        onUsageStatsClick = {
+                            navController.navigate(Screen.UsageStats.route)
+                        },
                         onMalSyncClick = {
                             navController.navigate(Screen.MalSync.route)
                         },
@@ -352,6 +417,18 @@ fun MainApp(
                         },
                         onCustomizationPlaygroundClick = {
                             navController.navigate(Screen.CustomizationPlayground.route)
+                        }
+                    )
+                }
+
+                composable(Screen.UsageStats.route) {
+                    UsageStatsScreen(
+                        repository = repository,
+                        onBackClick = {
+                            navController.popBackStack()
+                        },
+                        onAnimeClick = { animeId ->
+                            navController.navigate(Screen.Details.createRoute(animeId))
                         }
                     )
                 }

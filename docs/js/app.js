@@ -14,6 +14,9 @@
     currentRoute: 'home',
     arrivedViaDeepLink: false,
     initialSearchHandled: false,
+    usageTimer: null,
+    lastUsageTickMs: 0,
+    lastHiddenAtMs: 0,
 
     init() {
       // 1. Apply user's saved accent theme
@@ -24,18 +27,60 @@
       window.ZenithPlayer.init();
       window.ZenithUI?.init?.();
 
-      // 3. Bind Global Navigation Events
+      // 3. Bind Global Navigation Events & Foreground Usage Tracking
       this.bindGlobalNavigation();
+      this.startUsageTracking();
 
       // 4. Listen for URL Hash Changes and window unload
       window.addEventListener('hashchange', () => this.handleRoute());
       window.addEventListener('beforeunload', () => {
         window.ZenithPlayer?.stopProgressTracking();
+        this.flushUsageTracking();
       });
 
       // 5. Check URL search params (?anime=ID&ep=EP) and initial route dispatch
       this.consumeInitialSearchParams();
       this.handleRoute();
+    },
+
+    startUsageTracking() {
+      if (this.usageTimer) clearInterval(this.usageTimer);
+      this.lastUsageTickMs = Date.now();
+      this.lastHiddenAtMs = 0;
+
+      if (!document.hidden) {
+        window.ZenithStorage?.recordAppUsage?.(0, { incrementSession: true });
+      }
+
+      document.addEventListener('visibilitychange', () => {
+        const now = Date.now();
+        if (document.hidden) {
+          this.flushUsageTracking();
+          this.lastHiddenAtMs = now;
+        } else {
+          const awayMs = this.lastHiddenAtMs > 0 ? (now - this.lastHiddenAtMs) : 0;
+          this.lastUsageTickMs = now;
+          if (awayMs > 60000) {
+            window.ZenithStorage?.recordAppUsage?.(0, { incrementSession: true });
+          }
+        }
+      });
+
+      this.usageTimer = setInterval(() => {
+        if (!document.hidden) {
+          this.flushUsageTracking();
+        }
+      }, 15000);
+    },
+
+    flushUsageTracking() {
+      if (!this.lastUsageTickMs) return;
+      const now = Date.now();
+      const deltaSec = Math.floor((now - this.lastUsageTickMs) / 1000);
+      this.lastUsageTickMs = now;
+      if (deltaSec > 0 && !document.hidden) {
+        window.ZenithStorage?.recordAppUsage?.(Math.min(60, deltaSec), { incrementSession: false });
+      }
     },
 
     isAndroid() {
